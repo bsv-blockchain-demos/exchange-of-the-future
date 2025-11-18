@@ -1,14 +1,38 @@
-// Update this page (the content is just a fallback if you fail to update the page)
+import { useState } from "react";
+import { WalletConnect } from "@/components/WalletConnect";
+import { Dashboard } from "@/components/Dashboard";
+import { toast } from "sonner";
 
 const Index = () => {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="text-center">
-        <h1 className="mb-4 text-4xl font-bold">Welcome to Your Blank App</h1>
-        <p className="text-xl text-muted-foreground">Start building your amazing project here!</p>
-      </div>
-    </div>
-  );
+  const [isConnected, setIsConnected] = useState(false);
+  const [publicKey, setPublicKey] = useState("");
+
+  const handleConnect = async () => {
+    try {
+      // @ts-ignore - BSV SDK types
+      const { WalletClient } = await import("@bsv/sdk");
+      const wallet = new WalletClient();
+      const result = await wallet.getPublicKey({ identityKey: true });
+      setPublicKey(result.publicKey);
+      setIsConnected(true);
+      toast.success("Wallet connected successfully!");
+    } catch (error) {
+      console.error("Failed to connect wallet:", error);
+      toast.error("Failed to connect wallet. Please try again.");
+    }
+  };
+
+  const handleDisconnect = () => {
+    setIsConnected(false);
+    setPublicKey("");
+    toast.info("Wallet disconnected");
+  };
+
+  if (!isConnected) {
+    return <WalletConnect onConnect={handleConnect} />;
+  }
+
+  return <Dashboard publicKey={publicKey} onDisconnect={handleDisconnect} />;
 };
 
 export default Index;
