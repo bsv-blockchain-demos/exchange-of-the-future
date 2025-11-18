@@ -1,52 +1,31 @@
 import express, { Request, Response } from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
-import { authMiddleware } from '@bsv/auth-express-middleware'
-import { WalletInterface, Transaction, P2PKH, PublicKey, createNonce, InternalizeActionArgs } from '@bsv/sdk'
+import { createAuthMiddleware, AuthRequest } from '@bsv/auth-express-middleware'
+import { Transaction, P2PKH, PublicKey, createNonce, InternalizeActionArgs, Random, Utils } from '@bsv/sdk'
 import { makeWallet } from './wallet.js'
 import { BalanceStorage } from './storage.js'
 
 // Load environment variables
 dotenv.config()
+const chain = process.env.CHAIN! as 'test' | 'main'
+const storageURL = process.env.STORAGE_URL!
+const privateKey = process.env.PRIVATE_KEY!
 
 const app = express()
 const PORT = process.env.PORT || 3000
 
 // Middleware
+console.log('Initializing wallet...')
+const wallet = await makeWallet(chain, storageURL, privateKey)
+const authMiddleware = createAuthMiddleware({ wallet, logger: console, logLevel: 'debug', allowUnauthenticated: false })
+
 app.use(cors())
 app.use(express.json())
+app.use(authMiddleware)
 
 // Global state
-let wallet: WalletInterface
-let balanceStorage: BalanceStorage
-
-// Initialize wallet and storage
-async function initializeServer() {
-  try {
-    const storageURL = process.env.STORAGE_URL || 'https://store-us-1.bsvb.tech'
-    const chain = (process.env.CHAIN || 'main') as 'test' | 'main'
-    const privateKey = process.env.PRIVATE_KEY || '5b7ac8e92fe2bff5382f232b1eaf7ba52f924174b04940e36ba288ea6acd7fa0'
-
-    console.log('Initializing wallet...')
-    wallet = await makeWallet(chain, storageURL, privateKey)
-    balanceStorage = new BalanceStorage(wallet)
-    console.log('Wallet initialized successfully')
-
-    // Get and log the server's identity key
-    const { publicKey } = await wallet.getPublicKey({ identityKey: true })
-    console.log(`Server identity key: ${publicKey}`)
-  } catch (error) {
-    console.error('Failed to initialize wallet:', error)
-    process.exit(1)
-  }
-}
-
-// Extended Request type with auth property
-interface AuthRequest extends Request {
-  auth?: {
-    identityKey: string
-  }
-}
+const balanceStorage = new BalanceStorage(wallet)
 
 /**
  * POST /deposit
@@ -59,7 +38,7 @@ interface AuthRequest extends Request {
  *   amount: number
  * }
  */
-app.post('/deposit', async (req: Request, res: Response) => {
+app.post('/deposit', async (req: AuthRequest, res: Response) => {
   try {
     const { customInstructions, transaction, amount } = req.body
 
@@ -134,7 +113,7 @@ app.post('/deposit', async (req: Request, res: Response) => {
  * GET /balance/:identityKey
  * Returns the balance for a given identity key
  */
-app.get('/balance/:identityKey', async (req: Request, res: Response) => {
+app.get('/balance/:identityKey', async (req: AuthRequest, res: Response) => {
   try {
     const { identityKey } = req.params
 
@@ -164,7 +143,7 @@ app.get('/balance/:identityKey', async (req: Request, res: Response) => {
  */
 app.post('/withdraw/:amount', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    const amount = parseInt(req.params.amount, 10)
+    const amount = Number.parseInt(req.params.amount, 10)
 
     if (!req.auth || !req.auth.identityKey) {
       return res.status(401).json({ error: 'Authentication required' })
@@ -172,7 +151,7 @@ app.post('/withdraw/:amount', authMiddleware, async (req: AuthRequest, res: Resp
 
     const identityKey = req.auth.identityKey
 
-    if (isNaN(amount) || amount <= 0) {
+    if (Number.isNaN(amount) || amount <= 0) {
       return res.status(400).json({ error: 'Invalid amount' })
     }
 
@@ -187,8 +166,8 @@ app.post('/withdraw/:amount', authMiddleware, async (req: AuthRequest, res: Resp
     }
 
     // Generate BRC29 payment
-    const derivationPrefix = await createNonce(wallet)
-    const derivationSuffix = await createNonce(wallet)
+    const derivationPrefix = Utils.toBase64(Random(8))
+    const derivationSuffix = Utils.toBase64(Random(8))
 
     // Get recipient's derived public key using BRC29 protocol
     const { publicKey: derivedPubKey } = await wallet.getPublicKey({

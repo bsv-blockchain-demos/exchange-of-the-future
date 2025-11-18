@@ -19,8 +19,8 @@ export class BalanceStorage {
     try {
       const value = await this.kvStore.get(identityKey)
       if (!value) return 0
-      const balance = parseInt(value, 10)
-      return isNaN(balance) ? 0 : balance
+      const balance = Number.parseInt(value, 10)
+      return Number.isNaN(balance) ? 0 : balance
     } catch (error) {
       console.error(`Error getting balance for ${identityKey}:`, error)
       return 0
