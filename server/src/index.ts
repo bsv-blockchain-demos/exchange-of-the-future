@@ -40,37 +40,37 @@ const balanceStorage = new BalanceStorage(wallet)
  */
 app.post('/deposit', async (req: AuthRequest, res: Response) => {
   try {
-    const { customInstructions, transaction, amount } = req.body
+    const args = req.body as InternalizeActionArgs
 
-    if (!customInstructions || !transaction || !amount) {
+    if (!args.tx || !args.outputs) {
       return res.status(400).json({
-        error: 'Missing required fields: customInstructions, transaction, amount'
+        error: 'Missing required fields: tx, outputs'
       })
     }
 
-    const { derivationPrefix, derivationSuffix } = customInstructions
+    const transaction = Transaction.fromBEEF(args.tx)
 
-    // Parse the transaction to get the sender's identity key
-    // The sender's identity key should be in the payment remittance
-    // For now, we'll extract it from the transaction metadata
-    const tx = Transaction.fromBEEF(transaction)
+    const { derivationPrefix, derivationSuffix, senderIdentityKey } = args.outputs[0].paymentRemittance!
 
-    // Get the sender's identity key from the first output's script
-    // In a real implementation, this would come from the client
-    let senderIdentityKey: string
+    const depositAmount = transaction.outputs[0].satoshis!
+    const pkh = transaction.outputs[0].lockingScript.chunks[2].data
 
-    // Try to get sender from request body if provided
-    if (req.body.sender) {
-      senderIdentityKey = req.body.sender
-    } else {
+    const { publicKey: derivedPubKey } = await wallet.getPublicKey({
+      protocolID: [2, '3241645161d8'], // BRC29 protocol
+      keyID: `${derivationPrefix} ${derivationSuffix}`,
+      counterparty: senderIdentityKey,
+      forSelf: true
+    })
+
+    if (PublicKey.fromString(derivedPubKey).toHash() !== pkh) {
       return res.status(400).json({
-        error: 'Sender identity key is required'
+        error: 'PublicKey Hash Mismatch'
       })
     }
 
     // Internalize the payment
     const params: InternalizeActionArgs = {
-      tx: transaction,
+      tx: args.tx,
       outputs: [{
         outputIndex: 0,
         protocol: 'wallet payment',
@@ -84,10 +84,16 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
       labels: ['deposit', senderIdentityKey]
     }
 
-    const result = await wallet.internalizeAction(params)
+    const { accepted } = await wallet.internalizeAction(params)
+
+    if (!accepted) {
+      return res.status(400).json({
+        error: 'Failed to process deposit',
+        details: 'Transaction was not accepted'
+      })
+    }
 
     // Update balance
-    const depositAmount = tx.outputs[0].satoshis || amount
     const newBalance = await balanceStorage.addBalance(senderIdentityKey, depositAmount)
 
     console.log(`Deposit processed: ${depositAmount} sats from ${senderIdentityKey.slice(0, 10)}...`)
@@ -95,8 +101,8 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
 
     return res.json({
       success: true,
-      txid: result.txid,
-      amount: depositAmount,
+      txid: transaction.id('hex'),
+      depositAmount,
       newBalance,
       message: 'Deposit successful'
     })
@@ -137,11 +143,11 @@ app.get('/balance/:identityKey', async (req: AuthRequest, res: Response) => {
 })
 
 /**
- * POST /withdraw/:amount
+ * GET /withdraw/:amount
  * Creates a withdrawal payment for the authenticated user
  * Requires authentication via @bsv/auth-express-middleware
  */
-app.post('/withdraw/:amount', authMiddleware, async (req: AuthRequest, res: Response) => {
+app.get('/withdraw/:amount', async (req: AuthRequest, res: Response) => {
   try {
     const amount = Number.parseInt(req.params.amount, 10)
 
@@ -190,7 +196,7 @@ app.post('/withdraw/:amount', authMiddleware, async (req: AuthRequest, res: Resp
         customInstructions: JSON.stringify({
           derivationPrefix,
           derivationSuffix,
-          recipient: identityKey
+          senderIdentityKey: identityKey
         }),
         outputDescription: 'Withdrawal payment'
       }],
@@ -244,8 +250,6 @@ app.get('/health', (req: Request, res: Response) => {
 
 // Start server
 async function start() {
-  await initializeServer()
-
   app.listen(PORT, () => {
     console.log(`\n🚀 BSV Exchange Server running on http://localhost:${PORT}`)
     console.log(`\nEndpoints:`)
