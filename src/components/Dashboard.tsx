@@ -1,10 +1,18 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ArrowDownUp, LogOut, Wallet, TrendingUp, Send } from "lucide-react";
+import { ArrowDownUp, LogOut, Wallet, TrendingUp, Send, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { depositPayment, getBalance, withdrawFunds } from "@/lib/api";
+import {
+  createDepositPayment,
+  internalizeWithdrawal,
+  bsvToSatoshis,
+  satoshisToBsv,
+  getServerIdentityKey
+} from "@/lib/bsv-wallet";
 
 interface DashboardProps {
   publicKey: string;
@@ -20,21 +28,75 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [swapAmount, setSwapAmount] = useState("");
   const [swapDirection, setSwapDirection] = useState<"bsv-to-usd" | "usd-to-bsv">("bsv-to-usd");
+  const [isDepositing, setIsDepositing] = useState(false);
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [isLoadingBalance, setIsLoadingBalance] = useState(false);
 
   const truncatedKey = `${publicKey.slice(0, 8)}...${publicKey.slice(-8)}`;
 
-  const handleDeposit = () => {
+  // Load balance from backend on mount
+  useEffect(() => {
+    loadBalance();
+  }, [publicKey]);
+
+  const loadBalance = async () => {
+    try {
+      setIsLoadingBalance(true);
+      const result = await getBalance(publicKey);
+      // Backend stores in satoshis, convert to BSV for display
+      setBsvBalance(satoshisToBsv(result.balance));
+    } catch (error) {
+      console.error("Failed to load balance:", error);
+      toast.error("Failed to load balance from server");
+    } finally {
+      setIsLoadingBalance(false);
+    }
+  };
+
+  const handleDeposit = async () => {
     const amount = parseFloat(depositAmount);
     if (isNaN(amount) || amount <= 0) {
       toast.error("Please enter a valid amount");
       return;
     }
-    setBsvBalance(prev => prev + amount);
-    setDepositAmount("");
-    toast.success(`Deposited ${amount} BSV`);
+
+    setIsDepositing(true);
+    try {
+      toast.info("Creating deposit transaction...");
+
+      // Get server's identity key
+      const serverIdentityKey = await getServerIdentityKey();
+
+      // Convert BSV to satoshis
+      const amountSatoshis = bsvToSatoshis(amount);
+
+      // Create the payment transaction
+      const { paymentToken, senderIdentityKey } = await createDepositPayment(
+        amountSatoshis,
+        serverIdentityKey
+      );
+
+      toast.info("Sending deposit to server...");
+
+      // Send to backend
+      const result = await depositPayment(paymentToken, senderIdentityKey);
+
+      // Update local balance from server response
+      setBsvBalance(satoshisToBsv(result.newBalance));
+      setDepositAmount("");
+
+      toast.success(
+        `Deposited ${amount} BSV (${amountSatoshis} sats)\nTXID: ${result.txid.slice(0, 16)}...`
+      );
+    } catch (error: any) {
+      console.error("Deposit failed:", error);
+      toast.error(`Deposit failed: ${error.message}`);
+    } finally {
+      setIsDepositing(false);
+    }
   };
 
-  const handleWithdraw = () => {
+  const handleWithdraw = async () => {
     const amount = parseFloat(withdrawAmount);
     if (isNaN(amount) || amount <= 0) {
       toast.error("Please enter a valid amount");
@@ -44,9 +106,41 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
       toast.error("Insufficient BSV balance");
       return;
     }
-    setBsvBalance(prev => prev - amount);
-    setWithdrawAmount("");
-    toast.success(`Withdrawn ${amount} BSV`);
+
+    setIsWithdrawing(true);
+    try {
+      toast.info("Creating withdrawal...");
+
+      const amountSatoshis = bsvToSatoshis(amount);
+
+      // Request withdrawal from backend
+      // Note: In production, this would need proper authentication headers
+      const result = await withdrawFunds(amountSatoshis);
+
+      toast.info("Internalizing withdrawal payment...");
+
+      // Internalize the payment into our wallet
+      const paymentData = result.payment.outputs[0].paymentRemittance;
+      await internalizeWithdrawal({
+        tx: result.payment.tx,
+        derivationPrefix: paymentData.derivationPrefix,
+        derivationSuffix: paymentData.derivationSuffix,
+        senderIdentityKey: paymentData.senderIdentityKey,
+      });
+
+      // Update local balance from server response
+      setBsvBalance(satoshisToBsv(result.newBalance));
+      setWithdrawAmount("");
+
+      toast.success(
+        `Withdrawn ${amount} BSV (${amountSatoshis} sats)\nTXID: ${result.txid.slice(0, 16)}...`
+      );
+    } catch (error: any) {
+      console.error("Withdrawal failed:", error);
+      toast.error(`Withdrawal failed: ${error.message}`);
+    } finally {
+      setIsWithdrawing(false);
+    }
   };
 
   const handleSwap = () => {
@@ -109,10 +203,19 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
               <CardDescription>Bitcoin SV</CardDescription>
             </CardHeader>
             <CardContent>
-              <p className="text-4xl font-bold text-primary">{bsvBalance.toFixed(8)}</p>
-              <p className="text-muted-foreground mt-2">
-                ≈ ${(bsvBalance * BSV_USD_RATE).toFixed(2)} USD
-              </p>
+              {isLoadingBalance ? (
+                <div className="flex items-center space-x-2">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                  <span className="text-muted-foreground">Loading...</span>
+                </div>
+              ) : (
+                <>
+                  <p className="text-4xl font-bold text-primary">{bsvBalance.toFixed(8)}</p>
+                  <p className="text-muted-foreground mt-2">
+                    ≈ ${(bsvBalance * BSV_USD_RATE).toFixed(2)} USD
+                  </p>
+                </>
+              )}
             </CardContent>
           </Card>
 
@@ -206,9 +309,17 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
               </div>
               <Button
                 onClick={handleDeposit}
+                disabled={isDepositing || isLoadingBalance}
                 className="w-full bg-primary hover:bg-primary/90 text-primary-foreground"
               >
-                Deposit
+                {isDepositing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  "Deposit"
+                )}
               </Button>
             </CardContent>
           </Card>
@@ -235,9 +346,17 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
               </div>
               <Button
                 onClick={handleWithdraw}
+                disabled={isWithdrawing || isLoadingBalance}
                 className="w-full bg-secondary hover:bg-secondary/90 text-secondary-foreground"
               >
-                Withdraw
+                {isWithdrawing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  "Withdraw"
+                )}
               </Button>
             </CardContent>
           </Card>
