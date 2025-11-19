@@ -1,8 +1,7 @@
 import express, { Request, Response } from 'express'
-import cors from 'cors'
 import dotenv from 'dotenv'
 import { createAuthMiddleware, AuthRequest } from '@bsv/auth-express-middleware'
-import { Transaction, P2PKH, PublicKey, createNonce, InternalizeActionArgs, Random, Utils } from '@bsv/sdk'
+import { Transaction, P2PKH, PublicKey, InternalizeActionArgs, Random, Utils, WalletInterface } from '@bsv/sdk'
 import { makeWallet } from './wallet.js'
 import { BalanceStorage } from './storage.js'
 
@@ -15,17 +14,47 @@ const privateKey = process.env.PRIVATE_KEY!
 const app = express()
 const PORT = process.env.PORT || 3000
 
+let _balanceStorage: BalanceStorage;
+let _wallet: WalletInterface;
 // Middleware
-console.log('Initializing wallet...')
-const wallet = await makeWallet(chain, storageURL, privateKey)
-const authMiddleware = createAuthMiddleware({ wallet, logger: console, logLevel: 'debug', allowUnauthenticated: false })
+async function initializeWalletMiddleware(app: express.Application): Promise<void> {
+  console.log('Initializing wallet...')
+  // Global state
+  _wallet = await makeWallet(chain, storageURL, privateKey);
+  _balanceStorage = new BalanceStorage(_wallet);
+  const authMiddleware = createAuthMiddleware({ wallet: _wallet, logger: console, logLevel: 'debug', allowUnauthenticated: false })
+  app.use(authMiddleware)
+}
 
-app.use(cors())
+// CORS setup
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*')
+  res.header('Access-Control-Allow-Headers', '*')
+  res.header('Access-Control-Allow-Methods', '*')
+  res.header('Access-Control-Expose-Headers', '*')
+  res.header('Access-Control-Allow-Private-Network', 'true')
+
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200)
+  } else {
+    next()
+  }
+})
 app.use(express.json())
-app.use(authMiddleware)
 
-// Global state
-const balanceStorage = new BalanceStorage(wallet)
+await initializeWalletMiddleware(app);
+
+/**
+ * Payment token format matching PeerPayClient
+ */
+export interface PaymentToken {
+  customInstructions: {
+    derivationPrefix: string
+    derivationSuffix: string
+  }
+  transaction: number[] // AtomicBEEF
+  amount: number
+}
 
 /**
  * POST /deposit
@@ -40,22 +69,23 @@ const balanceStorage = new BalanceStorage(wallet)
  */
 app.post('/deposit', async (req: AuthRequest, res: Response) => {
   try {
-    const args = req.body as InternalizeActionArgs
+    const args = req.body as PaymentToken;
 
-    if (!args.tx || !args.outputs) {
+    if (!args.transaction || !args.customInstructions) {
       return res.status(400).json({
-        error: 'Missing required fields: tx, outputs'
+        error: 'Missing required fields: transaction, customInstructions'
       })
     }
 
-    const transaction = Transaction.fromBEEF(args.tx)
+    const transaction = Transaction.fromBEEF(args.transaction)
 
-    const { derivationPrefix, derivationSuffix, senderIdentityKey } = args.outputs[0].paymentRemittance!
+    const { derivationPrefix, derivationSuffix } = args.customInstructions;
+    const senderIdentityKey = req.auth.identityKey; // This should be passed in the request body
 
-    const depositAmount = transaction.outputs[0].satoshis!
+    const depositAmount = transaction.outputs[0].satoshis
     const pkh = transaction.outputs[0].lockingScript.chunks[2].data
 
-    const { publicKey: derivedPubKey } = await wallet.getPublicKey({
+    const { publicKey: derivedPubKey } = await _wallet.getPublicKey({
       protocolID: [2, '3241645161d8'], // BRC29 protocol
       keyID: `${derivationPrefix} ${derivationSuffix}`,
       counterparty: senderIdentityKey,
@@ -70,7 +100,7 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
 
     // Internalize the payment
     const params: InternalizeActionArgs = {
-      tx: args.tx,
+      tx: args.transaction,
       outputs: [{
         outputIndex: 0,
         protocol: 'wallet payment',
@@ -84,7 +114,7 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
       labels: ['deposit', senderIdentityKey]
     }
 
-    const { accepted } = await wallet.internalizeAction(params)
+    const { accepted } = await _wallet.internalizeAction(params)
 
     if (!accepted) {
       return res.status(400).json({
@@ -94,7 +124,7 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
     }
 
     // Update balance
-    const newBalance = await balanceStorage.addBalance(senderIdentityKey, depositAmount)
+    const newBalance = await _balanceStorage.addBalance(senderIdentityKey, depositAmount)
 
     console.log(`Deposit processed: ${depositAmount} sats from ${senderIdentityKey.slice(0, 10)}...`)
     console.log(`New balance: ${newBalance} sats`)
@@ -119,18 +149,20 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
  * GET /balance/:identityKey
  * Returns the balance for a given identity key
  */
-app.get('/balance/:identityKey', async (req: AuthRequest, res: Response) => {
+app.get('/balance', async (req: AuthRequest, res: Response) => {
   try {
-    const { identityKey } = req.params
+    const { identityKey } = req.auth
 
     if (!identityKey) {
       return res.status(400).json({ error: 'Identity key is required' })
     }
 
-    const balance = await balanceStorage.getBalance(identityKey)
+    const balance = await _balanceStorage.getBalance(identityKey)
+
+    const { publicKey: serverIdentityKey } = await _wallet.getPublicKey({ identityKey: true })
 
     return res.json({
-      identityKey,
+      serverIdentityKey,
       balance
     })
   } catch (error) {
@@ -162,7 +194,7 @@ app.get('/withdraw/:amount', async (req: AuthRequest, res: Response) => {
     }
 
     // Check balance
-    const currentBalance = await balanceStorage.getBalance(identityKey)
+    const currentBalance = await _balanceStorage.getBalance(identityKey)
     if (currentBalance < amount) {
       return res.status(400).json({
         error: 'Insufficient balance',
@@ -176,7 +208,7 @@ app.get('/withdraw/:amount', async (req: AuthRequest, res: Response) => {
     const derivationSuffix = Utils.toBase64(Random(8))
 
     // Get recipient's derived public key using BRC29 protocol
-    const { publicKey: derivedPubKey } = await wallet.getPublicKey({
+    const { publicKey: derivedPubKey } = await _wallet.getPublicKey({
       protocolID: [2, '3241645161d8'], // BRC29 protocol
       keyID: `${derivationPrefix} ${derivationSuffix}`,
       counterparty: identityKey
@@ -188,7 +220,7 @@ app.get('/withdraw/:amount', async (req: AuthRequest, res: Response) => {
     ).toHex()
 
     // Create withdrawal transaction
-    const action = await wallet.createAction({
+    const action = await _wallet.createAction({
       description: `Withdrawal for ${identityKey.slice(0, 10)}...`,
       outputs: [{
         satoshis: amount,
@@ -204,7 +236,7 @@ app.get('/withdraw/:amount', async (req: AuthRequest, res: Response) => {
     })
 
     // Deduct from balance
-    const newBalance = await balanceStorage.subtractBalance(identityKey, amount)
+    const newBalance = await _balanceStorage.subtractBalance(identityKey, amount)
 
     console.log(`Withdrawal processed: ${amount} sats to ${identityKey.slice(0, 10)}...`)
     console.log(`New balance: ${newBalance} sats`)
@@ -218,7 +250,7 @@ app.get('/withdraw/:amount', async (req: AuthRequest, res: Response) => {
         paymentRemittance: {
           derivationPrefix,
           derivationSuffix,
-          senderIdentityKey: (await wallet.getPublicKey({ identityKey: true })).publicKey
+          senderIdentityKey: (await _wallet.getPublicKey({ identityKey: true })).publicKey
         }
       }],
       description: 'Withdrawal from exchange'
@@ -241,10 +273,12 @@ app.get('/withdraw/:amount', async (req: AuthRequest, res: Response) => {
 })
 
 // Health check endpoint
-app.get('/health', (req: Request, res: Response) => {
+app.get('/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
-    wallet: wallet ? 'initialized' : 'not initialized'
+    wallet: !!_wallet ? 'initialized' : 'not initialized',
+    balanceStorage: !!_balanceStorage ? 'initialized' : 'not initialized',
+    timestamp: new Date().toISOString(),
   })
 })
 
@@ -254,7 +288,7 @@ async function start() {
     console.log(`\n🚀 BSV Exchange Server running on http://localhost:${PORT}`)
     console.log(`\nEndpoints:`)
     console.log(`  POST   /deposit              - Accept a payment deposit`)
-    console.log(`  GET    /balance/:identityKey - Get user balance`)
+    console.log(`  GET    /balance              - Get user balance`)
     console.log(`  POST   /withdraw/:amount     - Withdraw funds (authenticated)`)
     console.log(`  GET    /health               - Health check\n`)
   })

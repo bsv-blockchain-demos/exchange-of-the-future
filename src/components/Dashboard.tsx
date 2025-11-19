@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,18 +10,20 @@ import {
   createDepositPayment,
   internalizeWithdrawal,
   bsvToSatoshis,
-  satoshisToBsv,
-  getServerIdentityKey
+  satoshisToBsv
 } from "@/lib/bsv-wallet";
+import { AuthFetch } from "@bsv/sdk";
+import { useWallet } from "@/hooks/use-wallet";
+
 
 interface DashboardProps {
-  publicKey: string;
+  identityKey: string;
   onDisconnect: () => void;
 }
 
 const BSV_USD_RATE = 30;
 
-export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
+export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
   const [bsvBalance, setBsvBalance] = useState(0);
   const [usdBalance, setUsdBalance] = useState(0);
   const [depositAmount, setDepositAmount] = useState("");
@@ -31,20 +33,25 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
   const [isDepositing, setIsDepositing] = useState(false);
   const [isWithdrawing, setIsWithdrawing] = useState(false);
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
+  const [authFetch, setAuthFetch] = useState<AuthFetch | null>(null);
+  const [serverIdentityKey, setServerIdentityKey] = useState<string>("");
 
-  const truncatedKey = `${publicKey.slice(0, 8)}...${publicKey.slice(-8)}`;
+  const { wallet } = useWallet();
 
   // Load balance from backend on mount
   useEffect(() => {
-    loadBalance();
-  }, [publicKey]);
+    const f = new AuthFetch(wallet);
+    setAuthFetch(f);
+    loadBalance(f);
+  }, [identityKey]);
 
-  const loadBalance = async () => {
+  const loadBalance = async (authFetch: AuthFetch) => {
     try {
       setIsLoadingBalance(true);
-      const result = await getBalance(publicKey);
+      const result = await getBalance(authFetch);
       // Backend stores in satoshis, convert to BSV for display
       setBsvBalance(satoshisToBsv(result.balance));
+      setServerIdentityKey(result.identityKey);
     } catch (error) {
       console.error("Failed to load balance:", error);
       toast.error("Failed to load balance from server");
@@ -53,9 +60,14 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
     }
   };
 
-  const handleDeposit = async () => {
-    const amount = parseFloat(depositAmount);
-    if (isNaN(amount) || amount <= 0) {
+  const handleDeposit = useCallback(async () => {
+    if (!authFetch) {
+      toast.error("Authentication not ready");
+      return;
+    }
+    
+    const amount = Number.parseFloat(depositAmount);
+    if (Number.isNaN(amount) || amount <= 0) {
       toast.error("Please enter a valid amount");
       return;
     }
@@ -64,14 +76,11 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
     try {
       toast.info("Creating deposit transaction...");
 
-      // Get server's identity key
-      const serverIdentityKey = await getServerIdentityKey();
-
       // Convert BSV to satoshis
       const amountSatoshis = bsvToSatoshis(amount);
 
       // Create the payment transaction
-      const { paymentToken, senderIdentityKey } = await createDepositPayment(
+      const paymentToken = await createDepositPayment(
         amountSatoshis,
         serverIdentityKey
       );
@@ -79,7 +88,7 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
       toast.info("Sending deposit to server...");
 
       // Send to backend
-      const result = await depositPayment(paymentToken, senderIdentityKey);
+      const result = await depositPayment(paymentToken, authFetch);
 
       // Update local balance from server response
       setBsvBalance(satoshisToBsv(result.newBalance));
@@ -94,11 +103,11 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
     } finally {
       setIsDepositing(false);
     }
-  };
+  }, [authFetch])
 
-  const handleWithdraw = async () => {
-    const amount = parseFloat(withdrawAmount);
-    if (isNaN(amount) || amount <= 0) {
+  const handleWithdraw = useCallback(async () => {
+    const amount = Number.parseFloat(withdrawAmount);
+    if (Number.isNaN(amount) || amount <= 0 || amount >= 21000000) {
       toast.error("Please enter a valid amount");
       return;
     }
@@ -113,9 +122,7 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
 
       const amountSatoshis = bsvToSatoshis(amount);
 
-      // Request withdrawal from backend
-      // Note: In production, this would need proper authentication headers
-      const result = await withdrawFunds(amountSatoshis);
+      const result = await withdrawFunds(amountSatoshis, authFetch);
 
       toast.info("Internalizing withdrawal payment...");
 
@@ -141,11 +148,11 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
     } finally {
       setIsWithdrawing(false);
     }
-  };
+  }, [authFetch]);
 
   const handleSwap = () => {
-    const amount = parseFloat(swapAmount);
-    if (isNaN(amount) || amount <= 0) {
+    const amount = Number.parseFloat(swapAmount);
+    if (Number.isNaN(amount) || amount <= 0) {
       toast.error("Please enter a valid amount");
       return;
     }
@@ -186,12 +193,13 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
             </h1>
             <p className="text-muted-foreground mt-2">
               <Wallet className="inline h-4 w-4 mr-1" />
-              {truncatedKey}
+              {identityKey}
             </p>
           </div>
           <Button onClick={onDisconnect} variant="outline">
             <LogOut className="mr-2 h-4 w-4" />
             Disconnect
+              {serverIdentityKey}
           </Button>
         </div>
 
@@ -271,10 +279,10 @@ export const Dashboard = ({ publicKey, onDisconnect }: DashboardProps) => {
                 {swapDirection === "bsv-to-usd" ? "BSV → USD" : "USD → BSV"}
               </p>
               <p className="text-lg font-semibold text-foreground">
-                {swapAmount && !isNaN(parseFloat(swapAmount))
+                {swapAmount && !Number.isNaN(Number.parseFloat(swapAmount))
                   ? swapDirection === "bsv-to-usd"
-                    ? `≈ $${(parseFloat(swapAmount) * BSV_USD_RATE).toFixed(2)} USD`
-                    : `≈ ${(parseFloat(swapAmount) / BSV_USD_RATE).toFixed(8)} BSV`
+                    ? `≈ $${(Number.parseFloat(swapAmount) * BSV_USD_RATE).toFixed(2)} USD`
+                    : `≈ ${(Number.parseFloat(swapAmount) / BSV_USD_RATE).toFixed(8)} BSV`
                   : "Enter amount"}
               </p>
             </div>

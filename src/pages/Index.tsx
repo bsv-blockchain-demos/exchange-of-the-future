@@ -2,19 +2,19 @@ import { useState } from "react";
 import { WalletConnect } from "@/components/WalletConnect";
 import { Dashboard } from "@/components/Dashboard";
 import { toast } from "sonner";
+import { useWallet } from "@/hooks/use-wallet";
 
 const Index = () => {
-  const [isConnected, setIsConnected] = useState(false);
-  const [publicKey, setPublicKey] = useState("");
+  const [identityKey, setIdentityKey] = useState("");
+  const { wallet } = useWallet();
 
   const handleConnect = async () => {
     try {
-      // @ts-ignore - BSV SDK types
-      const { WalletClient } = await import("@bsv/sdk");
-      const wallet = new WalletClient();
-      const result = await wallet.getPublicKey({ identityKey: true });
-      setPublicKey(result.publicKey);
-      setIsConnected(true);
+      if (!wallet) {
+        throw new Error("No wallet available");
+      }
+      const { publicKey } = await wallet.getPublicKey({ identityKey: true });
+      setIdentityKey(publicKey);
       toast.success("Wallet connected successfully!");
     } catch (error) {
       console.error("Failed to connect wallet:", error);
@@ -23,16 +23,15 @@ const Index = () => {
   };
 
   const handleDisconnect = () => {
-    setIsConnected(false);
-    setPublicKey("");
+    setIdentityKey("");
     toast.info("Wallet disconnected");
   };
 
-  if (!isConnected) {
+  if (!identityKey) {
     return <WalletConnect onConnect={handleConnect} />;
   }
 
-  return <Dashboard publicKey={publicKey} onDisconnect={handleDisconnect} />;
+  return <Dashboard identityKey={identityKey} onDisconnect={handleDisconnect} />;
 };
 
 export default Index;

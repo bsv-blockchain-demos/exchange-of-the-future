@@ -1,6 +1,6 @@
-import { InternalizeActionArgs } from '@bsv/sdk'
+import { InternalizeActionArgs, AuthFetch } from '@bsv/sdk'
 
-const API_BASE = '/api'
+const API_BASE = 'http://localhost:3000'
 
 /**
  * Payment token format matching PeerPayClient
@@ -10,7 +10,7 @@ export interface PaymentToken {
     derivationPrefix: string
     derivationSuffix: string
   }
-  transaction: string // AtomicBEEF
+  transaction: number[] // AtomicBEEF
   amount: number
 }
 
@@ -19,7 +19,7 @@ export interface PaymentToken {
  */
 export async function depositPayment(
   paymentToken: PaymentToken,
-  senderIdentityKey: string
+  auth: AuthFetch
 ): Promise<{
   success: boolean
   txid: string
@@ -27,15 +27,12 @@ export async function depositPayment(
   newBalance: number
   message: string
 }> {
-  const response = await fetch(`${API_BASE}/deposit`, {
+  const response = await auth.fetch(`${API_BASE}/deposit`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      ...paymentToken,
-      sender: senderIdentityKey,
-    }),
+    body: JSON.stringify(paymentToken),
   })
 
   if (!response.ok) {
@@ -49,11 +46,11 @@ export async function depositPayment(
 /**
  * Get user balance from backend
  */
-export async function getBalance(identityKey: string): Promise<{
+export async function getBalance(auth: AuthFetch): Promise<{
   identityKey: string
   balance: number
 }> {
-  const response = await fetch(`${API_BASE}/balance/${identityKey}`)
+  const response = await auth.fetch(`${API_BASE}/balance`)
 
   if (!response.ok) {
     const error = await response.json()
@@ -68,7 +65,7 @@ export async function getBalance(identityKey: string): Promise<{
  */
 export async function withdrawFunds(
   amount: number,
-  authHeaders?: Record<string, string>
+  auth: AuthFetch
 ): Promise<{
   success: boolean
   payment: InternalizeActionArgs
@@ -76,11 +73,10 @@ export async function withdrawFunds(
   newBalance: number
   txid: string
 }> {
-  const response = await fetch(`${API_BASE}/withdraw/${amount}`, {
+  const response = await auth.fetch(`${API_BASE}/withdraw/${amount}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...authHeaders,
     },
   })
 
@@ -95,10 +91,10 @@ export async function withdrawFunds(
 /**
  * Check backend health
  */
-export async function checkHealth(): Promise<{
+export async function checkHealth(auth: AuthFetch): Promise<{
   status: string
   wallet: string
 }> {
-  const response = await fetch(`${API_BASE}/health`)
+  const response = await auth.fetch(`${API_BASE}/health`)
   return response.json()
 }

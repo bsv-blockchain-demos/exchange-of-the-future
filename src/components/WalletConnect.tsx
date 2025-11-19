@@ -11,10 +11,10 @@ export const WalletConnect = ({ onConnect }: WalletConnectProps) => {
       <div className="text-center space-y-8 p-8">
         <div className="space-y-4">
           <h1 className="text-6xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-            BSV Exchange
+            Superfast Exchange
           </h1>
           <p className="text-xl text-muted-foreground">
-            Trade Bitcoin SV with ease and security
+            Trade BSV using Direct Instant Payments.
           </p>
         </div>
         
@@ -30,7 +30,7 @@ export const WalletConnect = ({ onConnect }: WalletConnectProps) => {
         </div>
         
         <p className="text-sm text-muted-foreground mt-8">
-          Powered by BSV SDK
+          Powered by BSV Blockchain
         </p>
       </div>
     </div>

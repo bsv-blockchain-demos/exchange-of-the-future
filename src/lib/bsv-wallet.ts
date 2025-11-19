@@ -1,4 +1,5 @@
 import { PaymentToken } from './api'
+import { WalletClient, P2PKH, PublicKey, Utils, Random, Transaction } from '@bsv/sdk'
 
 /**
  * BSV Wallet utilities for creating deposit and withdrawal transactions
@@ -11,9 +12,8 @@ import { PaymentToken } from './api'
 export async function createDepositPayment(
   amountSatoshis: number,
   recipientIdentityKey: string
-): Promise<{ paymentToken: PaymentToken; senderIdentityKey: string }> {
+): Promise<PaymentToken> {
   // Dynamically import WalletClient to avoid issues
-  const { WalletClient, P2PKH, PublicKey, createNonce } = await import('@bsv/sdk')
 
   const wallet = new WalletClient()
 
@@ -23,8 +23,8 @@ export async function createDepositPayment(
   })
 
   // Generate derivation paths
-  const derivationPrefix = await createNonce(wallet)
-  const derivationSuffix = await createNonce(wallet)
+  const derivationPrefix = Utils.toBase64(Random(8))
+  const derivationSuffix = Utils.toBase64(Random(8))
 
   // Get recipient's derived public key using BRC29
   const { publicKey: derivedPubKey } = await wallet.getPublicKey({
@@ -45,15 +45,10 @@ export async function createDepositPayment(
       {
         satoshis: amountSatoshis,
         lockingScript,
-        customInstructions: JSON.stringify({
-          derivationPrefix,
-          derivationSuffix,
-          recipient: recipientIdentityKey,
-        }),
         outputDescription: 'Exchange deposit',
       },
     ],
-    labels: ['deposit', 'exchange'],
+    labels: ['deposit', senderIdentityKey],
   })
 
   const paymentToken: PaymentToken = {
@@ -61,14 +56,11 @@ export async function createDepositPayment(
       derivationPrefix,
       derivationSuffix,
     },
-    transaction: action.tx!,
+    transaction: action.tx,
     amount: amountSatoshis,
   }
 
-  return {
-    paymentToken,
-    senderIdentityKey,
-  }
+  return paymentToken;
 }
 
 /**
@@ -83,8 +75,6 @@ export async function internalizeWithdrawal(
     senderIdentityKey: string
   }
 ): Promise<{ txid: string }> {
-  const { WalletClient } = await import('@bsv/sdk')
-
   const wallet = new WalletClient()
 
   // Internalize the payment
@@ -105,7 +95,14 @@ export async function internalizeWithdrawal(
     labels: ['withdrawal', 'exchange'],
   })
 
-  return { txid: result.txid! }
+  if (!result.accepted) {
+    throw new Error('Withdrawal payment was not accepted');
+  }
+
+  const transaction = Transaction.fromBEEF(paymentData.tx);
+  const txid = transaction.id('hex');
+
+  return { txid }
 }
 
 /**
@@ -120,20 +117,4 @@ export function bsvToSatoshis(bsv: number): number {
  */
 export function satoshisToBsv(satoshis: number): number {
   return satoshis / 100000000
-}
-
-/**
- * Get the server's identity key (hardcoded from backend .env)
- * In production, this should be fetched from an endpoint
- */
-export async function getServerIdentityKey(): Promise<string> {
-  // For now, we need to derive this from the server's private key
-  // In production, add a /server-identity endpoint to the backend
-  // For development, we'll compute it here
-  const { PrivateKey } = await import('@bsv/sdk')
-
-  // This is the same private key as in .env
-  const serverPrivateKey = '5b7ac8e92fe2bff5382f232b1eaf7ba52f924174b04940e36ba288ea6acd7fa0'
-  const privKey = new PrivateKey(serverPrivateKey, 'hex')
-  return privKey.toPublicKey().toString()
 }
