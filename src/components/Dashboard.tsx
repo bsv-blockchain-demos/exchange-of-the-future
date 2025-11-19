@@ -8,9 +8,7 @@ import { toast } from "sonner";
 import { depositPayment, getBalance, withdrawFunds } from "@/lib/api";
 import {
   createDepositPayment,
-  internalizeWithdrawal,
-  bsvToSatoshis,
-  satoshisToBsv
+  internalizeWithdrawal
 } from "@/lib/bsv-wallet";
 import { AuthFetch } from "@bsv/sdk";
 import { useWallet } from "@/hooks/use-wallet";
@@ -22,9 +20,10 @@ interface DashboardProps {
 }
 
 const BSV_USD_RATE = 30;
+const SATOSHIS_PER_BSV = 100000000;
 
 export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
-  const [bsvBalance, setBsvBalance] = useState(0);
+  const [bsvBalanceSats, setBsvBalanceSats] = useState(0); // Store in satoshis
   const [usdBalance, setUsdBalance] = useState(0);
   const [depositAmount, setDepositAmount] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
@@ -49,9 +48,10 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
     try {
       setIsLoadingBalance(true);
       const result = await getBalance(authFetch);
-      // Backend stores in satoshis, convert to BSV for display
-      setBsvBalance(satoshisToBsv(result.balance));
-      setServerIdentityKey(result.identityKey);
+      // Backend stores in satoshis, keep as satoshis
+      setBsvBalanceSats(result.balance);
+      setServerIdentityKey(result.serverIdentityKey);
+      toast.info(`Loaded balance: ${result.balance} satoshis`);
     } catch (error) {
       console.error("Failed to load balance:", error);
       toast.error("Failed to load balance from server");
@@ -65,10 +65,10 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
       toast.error("Authentication not ready");
       return;
     }
-    
-    const amount = Number.parseFloat(depositAmount);
-    if (Number.isNaN(amount) || amount <= 0) {
-      toast.error("Please enter a valid amount");
+
+    const amountSatoshis = Number.parseInt(depositAmount, 10);
+    if (Number.isNaN(amountSatoshis) || amountSatoshis < 1 || amountSatoshis > 1000) {
+      toast.error("Please enter a valid amount between 1 and 1000 satoshis");
       return;
     }
 
@@ -76,10 +76,9 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
     try {
       toast.info("Creating deposit transaction...");
 
-      // Convert BSV to satoshis
-      const amountSatoshis = bsvToSatoshis(amount);
+      console.log({ serverIdentityKey })
 
-      // Create the payment transaction
+      // Create the payment transaction (amount already in satoshis)
       const paymentToken = await createDepositPayment(
         amountSatoshis,
         serverIdentityKey
@@ -90,12 +89,12 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
       // Send to backend
       const result = await depositPayment(paymentToken, authFetch);
 
-      // Update local balance from server response
-      setBsvBalance(satoshisToBsv(result.newBalance));
+      // Update local balance from server response (already in satoshis)
+      setBsvBalanceSats(result.newBalance);
       setDepositAmount("");
 
       toast.success(
-        `Deposited ${amount} BSV (${amountSatoshis} sats)\nTXID: ${result.txid.slice(0, 16)}...`
+        `Deposited ${amountSatoshis} sats\nTXID: ${result.txid.slice(0, 16)}...`
       );
     } catch (error: any) {
       console.error("Deposit failed:", error);
@@ -103,24 +102,22 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
     } finally {
       setIsDepositing(false);
     }
-  }, [authFetch])
+  }, [authFetch, depositAmount, serverIdentityKey])
 
   const handleWithdraw = useCallback(async () => {
-    const amount = Number.parseFloat(withdrawAmount);
-    if (Number.isNaN(amount) || amount <= 0 || amount >= 21000000) {
-      toast.error("Please enter a valid amount");
+    const amountSatoshis = Number.parseInt(withdrawAmount, 10);
+    if (Number.isNaN(amountSatoshis) || amountSatoshis <= 0) {
+      toast.error("Please enter a valid amount in satoshis");
       return;
     }
-    if (amount > bsvBalance) {
-      toast.error("Insufficient BSV balance");
+    if (amountSatoshis > bsvBalanceSats) {
+      toast.error("Insufficient balance");
       return;
     }
 
     setIsWithdrawing(true);
     try {
       toast.info("Creating withdrawal...");
-
-      const amountSatoshis = bsvToSatoshis(amount);
 
       const result = await withdrawFunds(amountSatoshis, authFetch);
 
@@ -135,12 +132,12 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
         senderIdentityKey: paymentData.senderIdentityKey,
       });
 
-      // Update local balance from server response
-      setBsvBalance(satoshisToBsv(result.newBalance));
+      // Update local balance from server response (already in satoshis)
+      setBsvBalanceSats(result.newBalance);
       setWithdrawAmount("");
 
       toast.success(
-        `Withdrawn ${amount} BSV (${amountSatoshis} sats)\nTXID: ${result.txid.slice(0, 16)}...`
+        `Withdrawn ${amountSatoshis} sats\nTXID: ${result.txid.slice(0, 16)}...`
       );
     } catch (error: any) {
       console.error("Withdrawal failed:", error);
@@ -148,31 +145,36 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
     } finally {
       setIsWithdrawing(false);
     }
-  }, [authFetch]);
+  }, [authFetch, withdrawAmount, bsvBalanceSats]);
 
   const handleSwap = () => {
-    const amount = Number.parseFloat(swapAmount);
+    const amount = Number.parseInt(swapAmount, 10);
     if (Number.isNaN(amount) || amount <= 0) {
       toast.error("Please enter a valid amount");
       return;
     }
 
     if (swapDirection === "bsv-to-usd") {
-      if (amount > bsvBalance) {
-        toast.error("Insufficient BSV balance");
+      // Swapping satoshis to USD
+      if (amount > bsvBalanceSats) {
+        toast.error("Insufficient balance");
         return;
       }
-      setBsvBalance(prev => prev - amount);
-      setUsdBalance(prev => prev + (amount * BSV_USD_RATE));
-      toast.success(`Swapped ${amount} BSV for $${(amount * BSV_USD_RATE).toFixed(2)}`);
+      const usdAmount = (amount / SATOSHIS_PER_BSV) * BSV_USD_RATE;
+      setBsvBalanceSats(prev => prev - amount);
+      setUsdBalance(prev => prev + usdAmount);
+      toast.success(`Swapped ${amount} sats for $${usdAmount.toFixed(2)}`);
     } else {
-      if (amount > usdBalance) {
+      // Swapping USD to satoshis
+      const usdAmount = Number.parseFloat(swapAmount);
+      if (Number.isNaN(usdAmount) || usdAmount > usdBalance) {
         toast.error("Insufficient USD balance");
         return;
       }
-      setUsdBalance(prev => prev - amount);
-      setBsvBalance(prev => prev + (amount / BSV_USD_RATE));
-      toast.success(`Swapped $${amount.toFixed(2)} for ${(amount / BSV_USD_RATE).toFixed(8)} BSV`);
+      const satsAmount = Math.floor((usdAmount / BSV_USD_RATE) * SATOSHIS_PER_BSV);
+      setUsdBalance(prev => prev - usdAmount);
+      setBsvBalanceSats(prev => prev + satsAmount);
+      toast.success(`Swapped $${usdAmount.toFixed(2)} for ${satsAmount} sats`);
     }
     setSwapAmount("");
   };
@@ -208,7 +210,7 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
           <Card className="bg-gradient-card backdrop-blur-lg border-border">
             <CardHeader>
               <CardTitle className="text-foreground">BSV Balance</CardTitle>
-              <CardDescription>Bitcoin SV</CardDescription>
+              <CardDescription>Bitcoin SV (in satoshis)</CardDescription>
             </CardHeader>
             <CardContent>
               {isLoadingBalance ? (
@@ -218,9 +220,9 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
                 </div>
               ) : (
                 <>
-                  <p className="text-4xl font-bold text-primary">{bsvBalance.toFixed(8)}</p>
+                  <p className="text-4xl font-bold text-primary">{bsvBalanceSats.toLocaleString()} sats</p>
                   <p className="text-muted-foreground mt-2">
-                    ≈ ${(bsvBalance * BSV_USD_RATE).toFixed(2)} USD
+                    ≈ ${((bsvBalanceSats / SATOSHIS_PER_BSV) * BSV_USD_RATE).toFixed(2)} USD
                   </p>
                 </>
               )}
@@ -235,7 +237,7 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
             <CardContent>
               <p className="text-4xl font-bold text-secondary">${usdBalance.toFixed(2)}</p>
               <p className="text-muted-foreground mt-2">
-                ≈ {(usdBalance / BSV_USD_RATE).toFixed(8)} BSV
+                ≈ {Math.floor((usdBalance / BSV_USD_RATE) * SATOSHIS_PER_BSV).toLocaleString()} sats
               </p>
             </CardContent>
           </Card>
@@ -276,13 +278,13 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
 
             <div className="p-4 bg-muted rounded-lg">
               <p className="text-sm text-muted-foreground">
-                {swapDirection === "bsv-to-usd" ? "BSV → USD" : "USD → BSV"}
+                {swapDirection === "bsv-to-usd" ? "Satoshis → USD" : "USD → Satoshis"}
               </p>
               <p className="text-lg font-semibold text-foreground">
                 {swapAmount && !Number.isNaN(Number.parseFloat(swapAmount))
                   ? swapDirection === "bsv-to-usd"
-                    ? `≈ $${(Number.parseFloat(swapAmount) * BSV_USD_RATE).toFixed(2)} USD`
-                    : `≈ ${(Number.parseFloat(swapAmount) / BSV_USD_RATE).toFixed(8)} BSV`
+                    ? `≈ $${((Number.parseInt(swapAmount, 10) / SATOSHIS_PER_BSV) * BSV_USD_RATE).toFixed(2)} USD`
+                    : `≈ ${Math.floor((Number.parseFloat(swapAmount) / BSV_USD_RATE) * SATOSHIS_PER_BSV).toLocaleString()} sats`
                   : "Enter amount"}
               </p>
             </div>
@@ -291,7 +293,7 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
               onClick={handleSwap}
               className="w-full bg-gradient-primary hover:opacity-90 text-primary-foreground font-semibold"
             >
-              Swap {swapDirection === "bsv-to-usd" ? "BSV to USD" : "USD to BSV"}
+              Swap {swapDirection === "bsv-to-usd" ? "Sats to USD" : "USD to Sats"}
             </Button>
           </CardContent>
         </Card>
@@ -301,15 +303,17 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
           <Card className="bg-gradient-card backdrop-blur-lg border-border">
             <CardHeader>
               <CardTitle className="text-foreground">Deposit BSV</CardTitle>
-              <CardDescription>Add funds to your exchange balance</CardDescription>
+              <CardDescription>Add funds to your exchange balance (1-1000 satoshis)</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="deposit-amount">Amount (BSV)</Label>
+                <Label htmlFor="deposit-amount">Amount (satoshis)</Label>
                 <Input
                   id="deposit-amount"
                   type="number"
-                  placeholder="0.00000000"
+                  placeholder="100"
+                  min="1"
+                  max="1000"
                   value={depositAmount}
                   onChange={(e) => setDepositAmount(e.target.value)}
                   className="bg-input border-border"
@@ -338,15 +342,16 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
                 <Send className="mr-2 h-5 w-5" />
                 Withdraw BSV
               </CardTitle>
-              <CardDescription>Send funds back to your wallet</CardDescription>
+              <CardDescription>Send funds back to your wallet (in satoshis)</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="withdraw-amount">Amount (BSV)</Label>
+                <Label htmlFor="withdraw-amount">Amount (satoshis)</Label>
                 <Input
                   id="withdraw-amount"
                   type="number"
-                  placeholder="0.00000000"
+                  placeholder="100"
+                  min="1"
                   value={withdrawAmount}
                   onChange={(e) => setWithdrawAmount(e.target.value)}
                   className="bg-input border-border"

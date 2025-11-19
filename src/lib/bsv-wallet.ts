@@ -49,6 +49,9 @@ export async function createDepositPayment(
       },
     ],
     labels: ['deposit', senderIdentityKey],
+    options: {
+      randomizeOutputs: false
+    }
   })
 
   const paymentToken: PaymentToken = {

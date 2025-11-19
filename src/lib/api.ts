@@ -47,7 +47,7 @@ export async function depositPayment(
  * Get user balance from backend
  */
 export async function getBalance(auth: AuthFetch): Promise<{
-  identityKey: string
+  serverIdentityKey: string
   balance: number
 }> {
   const response = await auth.fetch(`${API_BASE}/balance`)
