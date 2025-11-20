@@ -21,7 +21,8 @@ async function initializeWalletMiddleware(app: express.Application): Promise<voi
   console.log('Initializing wallet...')
   // Global state
   _wallet = await makeWallet(chain, storageURL, privateKey);
-  _balanceStorage = new BalanceStorage(_wallet);
+  _balanceStorage = new BalanceStorage();
+  await _balanceStorage.connect();
   const authMiddleware = createAuthMiddleware({ wallet: _wallet, logger: console, logLevel: 'debug', allowUnauthenticated: false })
   app.use(authMiddleware)
 }
@@ -147,8 +148,8 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
 })
 
 /**
- * GET /balance/:identityKey
- * Returns the balance for a given identity key
+ * GET /balance
+ * Returns the balance for the authenticated user
  */
 app.get('/balance', async (req: AuthRequest, res: Response) => {
   try {
@@ -170,6 +171,67 @@ app.get('/balance', async (req: AuthRequest, res: Response) => {
     console.error('Balance check error:', error)
     return res.status(500).json({
       error: 'Failed to get balance',
+      details: error.message
+    })
+  }
+})
+
+/**
+ * GET /transactions
+ * Returns transaction history for the authenticated user
+ */
+app.get('/transactions', async (req: AuthRequest, res: Response) => {
+  try {
+    const { identityKey } = req.auth
+
+    if (!identityKey) {
+      return res.status(400).json({ error: 'Authentication required' })
+    }
+
+    // Get actions from the wallet
+    const result = await _wallet.listActions({
+      labels: [identityKey],
+      limit: 50,
+      includeLabels: true
+    })
+
+    console.dir(result, { depth: null })
+
+    // listActions returns { totalActions, actions }
+    const actionsList = result.actions || []
+
+    // Transform actions into a simpler format for the frontend
+    const transactions = actionsList.map((action) => {
+      // Determine direction based on labels
+      const isDeposit = action.labels?.includes('deposit')
+      const isWithdrawal = action.labels?.includes('withdrawal')
+
+      let direction: 'deposit' | 'withdrawal' | 'unknown' = 'unknown'
+      if (isDeposit) {
+        direction = 'deposit'
+      } else if (isWithdrawal) {
+        direction = 'withdrawal'
+      }
+
+      // Calculate total amount from outputs
+      const amount = action.satoshis || 0
+
+      return {
+        txid: action.txid,
+        counterparty: identityKey,
+        amount,
+        direction,
+        description: action.description
+      }
+    })
+
+    return res.json({
+      transactions
+    })
+  } catch (error: any) {
+    console.error('Transaction history error:', error)
+    return res.status(500).json({
+      error: 'Failed to get transaction history',
       details: error.message
     })
   }
@@ -294,5 +356,22 @@ async function start() {
     console.log(`  GET    /health               - Health check\n`)
   })
 }
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('\n\nShutting down gracefully...')
+  if (_balanceStorage) {
+    await _balanceStorage.disconnect()
+  }
+  process.exit(0)
+})
+
+process.on('SIGTERM', async () => {
+  console.log('\n\nShutting down gracefully...')
+  if (_balanceStorage) {
+    await _balanceStorage.disconnect()
+  }
+  process.exit(0)
+})
 
 start().catch(console.error)

@@ -98,3 +98,30 @@ export async function checkHealth(auth: AuthFetch): Promise<{
   const response = await auth.fetch(`${API_BASE}/health`)
   return response.json()
 }
+
+/**
+ * Transaction history item
+ */
+export interface Transaction {
+  txid: string
+  counterparty: string
+  amount: number
+  direction: 'deposit' | 'withdrawal' | 'unknown'
+  description: string
+}
+
+/**
+ * Get transaction history for the authenticated user
+ */
+export async function getTransactions(auth: AuthFetch): Promise<{
+  transactions: Transaction[]
+}> {
+  const response = await auth.fetch(`${API_BASE}/transactions`)
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.error || 'Failed to fetch transactions')
+  }
+
+  return response.json()
+}

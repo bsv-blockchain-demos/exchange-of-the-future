@@ -12,11 +12,15 @@ services:
       - CHAIN=${CHAIN}
       - STORAGE_URL=${STORAGE_URL}
       - PRIVATE_KEY=${PRIVATE_KEY}
+      - MONGODB_URI=mongodb://mongodb:27017/bsv_exchange
     env_file:
       - .env
     restart: unless-stopped
     networks:
       - bsv-network
+    depends_on:
+      mongodb:
+        condition: service_healthy
 
   # Frontend React App
   frontend:
@@ -35,6 +39,29 @@ services:
       timeout: 10s
       retries: 3
 
+  # MongoDB Database
+  mongodb:
+    image: mongo:latest
+    container_name: bsv-exchange-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=bsv_exchange
+    volumes:
+      - mongodb_data:/data/db
+    restart: unless-stopped
+    networks:
+      - bsv-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 networks:
   bsv-network:
     driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local

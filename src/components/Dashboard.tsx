@@ -12,6 +12,7 @@ import {
 } from "@/lib/bsv-wallet";
 import { AuthFetch } from "@bsv/sdk";
 import { useWallet } from "@/hooks/use-wallet";
+import { TransactionHistory } from "@/components/TransactionHistory";
 
 
 interface DashboardProps {
@@ -201,7 +202,6 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
           <Button onClick={onDisconnect} variant="outline">
             <LogOut className="mr-2 h-4 w-4" />
             Disconnect
-              {serverIdentityKey}
           </Button>
         </div>
 
@@ -374,6 +374,9 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
             </CardContent>
           </Card>
         </div>
+
+        {/* Transaction History */}
+        <TransactionHistory authFetch={authFetch} />
       </div>
     </div>
   );
