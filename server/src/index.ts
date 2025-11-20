@@ -85,8 +85,6 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
     const depositAmount = transaction.outputs[0].satoshis
     const pkh = transaction.outputs[0].lockingScript.chunks[2].data
 
-    console.log({ asm: transaction.outputs[0].lockingScript.toASM(), depositAmount, pkh });
-
     const { publicKey: derivedPubKey } = await _wallet.getPublicKey({
       protocolID: [2, '3241645161d8'], // BRC29 protocol
       keyID: `${derivationPrefix} ${derivationSuffix}`,
@@ -94,7 +92,8 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
       forSelf: true
     })
 
-    if (PublicKey.fromString(derivedPubKey).toHash() !== pkh) {
+
+    if (PublicKey.fromString(derivedPubKey).toHash('hex') !== Utils.toHex(pkh)) {
       return res.status(400).json({
         error: 'PublicKey Hash Mismatch'
       })
