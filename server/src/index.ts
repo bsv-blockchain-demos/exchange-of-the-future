@@ -238,21 +238,24 @@ app.get('/transactions', async (req: AuthRequest, res: Response) => {
 })
 
 /**
- * GET /withdraw/:amount
+ * POST /withdraw
  * Creates a withdrawal payment for the authenticated user
  * Requires authentication via @bsv/auth-express-middleware
+ *
+ * Body: { amount: number }
  */
-app.get('/withdraw/:amount', async (req: AuthRequest, res: Response) => {
+app.post('/withdraw', async (req: AuthRequest, res: Response) => {
   try {
-    const amount = Number.parseInt(req.params.amount, 10)
+    const { amount } = req.body
 
     if (!req.auth || !req.auth.identityKey) {
       return res.status(401).json({ error: 'Authentication required' })
     }
 
     const identityKey = req.auth.identityKey
+    const { publicKey: serverIdentityKey } = await _wallet.getPublicKey({ identityKey: true })
 
-    if (Number.isNaN(amount) || amount <= 0) {
+    if (typeof amount !== 'number' || Number.isNaN(amount) || amount <= 0) {
       return res.status(400).json({ error: 'Invalid amount' })
     }
 
@@ -291,11 +294,14 @@ app.get('/withdraw/:amount', async (req: AuthRequest, res: Response) => {
         customInstructions: JSON.stringify({
           derivationPrefix,
           derivationSuffix,
-          senderIdentityKey: identityKey
+          senderIdentityKey: serverIdentityKey
         }),
         outputDescription: 'Withdrawal payment'
       }],
-      labels: ['withdrawal', identityKey]
+      labels: ['withdrawal', identityKey],
+      options: {
+        randomizeOutputs: false
+      }
     })
 
     // Deduct from balance
@@ -313,7 +319,7 @@ app.get('/withdraw/:amount', async (req: AuthRequest, res: Response) => {
         paymentRemittance: {
           derivationPrefix,
           derivationSuffix,
-          senderIdentityKey: (await _wallet.getPublicKey({ identityKey: true })).publicKey
+          senderIdentityKey: serverIdentityKey
         }
       }],
       description: 'Withdrawal from exchange'
@@ -326,7 +332,7 @@ app.get('/withdraw/:amount', async (req: AuthRequest, res: Response) => {
       newBalance,
       txid: action.txid
     })
-  } catch (error) {
+  } catch (error: any) {
     console.error('Withdrawal error:', error)
     return res.status(500).json({
       error: 'Failed to process withdrawal',
@@ -352,7 +358,8 @@ async function start() {
     console.log(`\nEndpoints:`)
     console.log(`  POST   /deposit              - Accept a payment deposit`)
     console.log(`  GET    /balance              - Get user balance`)
-    console.log(`  POST   /withdraw/:amount     - Withdraw funds (authenticated)`)
+    console.log(`  GET    /transactions         - Get transaction history (authenticated)`)
+    console.log(`  POST   /withdraw             - Withdraw funds (authenticated)`)
     console.log(`  GET    /health               - Health check\n`)
   })
 }

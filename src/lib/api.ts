@@ -73,11 +73,12 @@ export async function withdrawFunds(
   newBalance: number
   txid: string
 }> {
-  const response = await auth.fetch(`${API_BASE}/withdraw/${amount}`, {
+  const response = await auth.fetch(`${API_BASE}/withdraw`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
+    body: JSON.stringify({ amount }),
   })
 
   if (!response.ok) {
