@@ -9,9 +9,10 @@ import { toast } from "sonner";
 
 interface TransactionHistoryProps {
   authFetch: AuthFetch | null;
+  refreshKey?: number;
 }
 
-export const TransactionHistory = ({ authFetch }: TransactionHistoryProps) => {
+export const TransactionHistory = ({ authFetch, refreshKey }: TransactionHistoryProps) => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -19,7 +20,7 @@ export const TransactionHistory = ({ authFetch }: TransactionHistoryProps) => {
     if (authFetch) {
       loadTransactions();
     }
-  }, [authFetch]);
+  }, [authFetch, refreshKey]);
 
   const loadTransactions = async () => {
     if (!authFetch) return;
@@ -73,7 +74,7 @@ export const TransactionHistory = ({ authFetch }: TransactionHistoryProps) => {
                   <TableHead>TXID</TableHead>
                   <TableHead>Counterparty</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
-                  <TableHead>Direction</TableHead>
+                  <TableHead className="text-right">Direction</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -88,7 +89,7 @@ export const TransactionHistory = ({ authFetch }: TransactionHistoryProps) => {
                     <TableCell className="text-right font-semibold">
                       {tx.amount.toLocaleString()} sats
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="text-right">
                       {tx.direction === 'deposit' ? (
                         <Badge variant="default" className="bg-green-500/20 text-green-500 hover:bg-green-500/30">
                           <ArrowDownToLine className="mr-1 h-3 w-3" />

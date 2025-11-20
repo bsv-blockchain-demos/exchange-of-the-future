@@ -160,14 +160,16 @@ app.get('/balance', async (req: AuthRequest, res: Response) => {
     }
 
     const balance = await _balanceStorage.getBalance(identityKey)
+    const usdBalance = await _balanceStorage.getUsdBalance(identityKey)
 
     const { publicKey: serverIdentityKey } = await _wallet.getPublicKey({ identityKey: true })
 
     return res.json({
       serverIdentityKey,
-      balance
+      balance,
+      usdBalance
     })
-  } catch (error) {
+  } catch (error: any) {
     console.error('Balance check error:', error)
     return res.status(500).json({
       error: 'Failed to get balance',
@@ -232,6 +234,69 @@ app.get('/transactions', async (req: AuthRequest, res: Response) => {
     console.error('Transaction history error:', error)
     return res.status(500).json({
       error: 'Failed to get transaction history',
+      details: error.message
+    })
+  }
+})
+
+/**
+ * POST /swap
+ * Swap between BSV and USD
+ * Requires authentication via @bsv/auth-express-middleware
+ *
+ * Body: { direction: 'bsv-to-usd' | 'usd-to-bsv', amount: number }
+ */
+app.post('/swap', async (req: AuthRequest, res: Response) => {
+  try {
+    const { direction, amount } = req.body
+
+    if (!req.auth || !req.auth.identityKey) {
+      return res.status(401).json({ error: 'Authentication required' })
+    }
+
+    const identityKey = req.auth.identityKey
+
+    if (!direction || (direction !== 'bsv-to-usd' && direction !== 'usd-to-bsv')) {
+      return res.status(400).json({ error: 'Invalid direction. Must be "bsv-to-usd" or "usd-to-bsv"' })
+    }
+
+    if (typeof amount !== 'number' || Number.isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid amount' })
+    }
+
+    const BSV_USD_RATE = 25000
+    const SATOSHIS_PER_BSV = 100000000
+
+    let result: { bsvBalance: number, usdBalance: number }
+
+    if (direction === 'bsv-to-usd') {
+      // Swap satoshis to USD
+      const satoshis = Math.floor(amount)
+      const usdAmount = (satoshis / SATOSHIS_PER_BSV) * BSV_USD_RATE
+
+      result = await _balanceStorage.swapBsvToUsd(identityKey, satoshis, usdAmount)
+
+      console.log(`Swapped ${satoshis} sats to $${usdAmount.toFixed(5)} USD for ${identityKey.slice(0, 10)}...`)
+    } else {
+      // Swap USD to satoshis
+      const usdAmount = amount
+      const satoshis = Math.floor((usdAmount / BSV_USD_RATE) * SATOSHIS_PER_BSV)
+
+      result = await _balanceStorage.swapUsdToBsv(identityKey, usdAmount, satoshis)
+
+      console.log(`Swapped $${usdAmount.toFixed(5)} USD to ${satoshis} sats for ${identityKey.slice(0, 10)}...`)
+    }
+
+    return res.json({
+      success: true,
+      bsvBalance: result.bsvBalance,
+      usdBalance: result.usdBalance,
+      direction
+    })
+  } catch (error: any) {
+    console.error('Swap error:', error)
+    return res.status(500).json({
+      error: 'Failed to process swap',
       details: error.message
     })
   }
@@ -359,6 +424,7 @@ async function start() {
     console.log(`  POST   /deposit              - Accept a payment deposit`)
     console.log(`  GET    /balance              - Get user balance`)
     console.log(`  GET    /transactions         - Get transaction history (authenticated)`)
+    console.log(`  POST   /swap                 - Swap between BSV and USD (authenticated)`)
     console.log(`  POST   /withdraw             - Withdraw funds (authenticated)`)
     console.log(`  GET    /health               - Health check\n`)
   })

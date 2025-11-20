@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ArrowDownUp, LogOut, Wallet, TrendingUp, Send, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { depositPayment, getBalance, withdrawFunds } from "@/lib/api";
+import { depositPayment, getBalance, withdrawFunds, swapFunds } from "@/lib/api";
 import {
   createDepositPayment,
   internalizeWithdrawal
@@ -20,7 +20,7 @@ interface DashboardProps {
   onDisconnect: () => void;
 }
 
-const BSV_USD_RATE = 30;
+const BSV_USD_RATE = 25000;
 const SATOSHIS_PER_BSV = 100000000;
 
 export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
@@ -35,6 +35,7 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
   const [authFetch, setAuthFetch] = useState<AuthFetch | null>(null);
   const [serverIdentityKey, setServerIdentityKey] = useState<string>("");
+  const [transactionRefreshKey, setTransactionRefreshKey] = useState(0);
 
   const { wallet } = useWallet();
 
@@ -51,8 +52,9 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
       const result = await getBalance(authFetch);
       // Backend stores in satoshis, keep as satoshis
       setBsvBalanceSats(result.balance);
+      setUsdBalance(result.usdBalance);
       setServerIdentityKey(result.serverIdentityKey);
-      toast.info(`Loaded balance: ${result.balance} satoshis`);
+      toast.info(`Loaded balance: ${result.balance} satoshis, $${result.usdBalance.toFixed(5)} USD`);
     } catch (error) {
       console.error("Failed to load balance:", error);
       toast.error("Failed to load balance from server");
@@ -97,6 +99,9 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
       toast.success(
         `Deposited ${amountSatoshis} sats\nTXID: ${result.txid.slice(0, 16)}...`
       );
+
+      // Refresh transaction history
+      setTransactionRefreshKey(prev => prev + 1);
     } catch (error: any) {
       console.error("Deposit failed:", error);
       toast.error(`Deposit failed: ${error.message}`);
@@ -140,6 +145,9 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
       toast.success(
         `Withdrawn ${amountSatoshis} sats\nTXID: ${result.txid.slice(0, 16)}...`
       );
+
+      // Refresh transaction history
+      setTransactionRefreshKey(prev => prev + 1);
     } catch (error: any) {
       console.error("Withdrawal failed:", error);
       toast.error(`Withdrawal failed: ${error.message}`);
@@ -148,36 +156,58 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
     }
   }, [authFetch, withdrawAmount, bsvBalanceSats]);
 
-  const handleSwap = () => {
-    const amount = Number.parseInt(swapAmount, 10);
+  const handleSwap = async () => {
+    if (!authFetch) {
+      toast.error("Authentication not ready");
+      return;
+    }
+
+    const amount = Number.parseFloat(swapAmount);
     if (Number.isNaN(amount) || amount <= 0) {
       toast.error("Please enter a valid amount");
       return;
     }
 
-    if (swapDirection === "bsv-to-usd") {
-      // Swapping satoshis to USD
-      if (amount > bsvBalanceSats) {
-        toast.error("Insufficient balance");
-        return;
+    try {
+      if (swapDirection === "bsv-to-usd") {
+        // Swapping satoshis to USD
+        const satoshis = Math.floor(amount);
+        if (satoshis > bsvBalanceSats) {
+          toast.error("Insufficient BSV balance");
+          return;
+        }
+
+        toast.info("Processing swap...");
+        const result = await swapFunds("bsv-to-usd", satoshis, authFetch);
+
+        setBsvBalanceSats(result.bsvBalance);
+        setUsdBalance(result.usdBalance);
+
+        const usdAmount = (satoshis / SATOSHIS_PER_BSV) * BSV_USD_RATE;
+        toast.success(`Swapped ${satoshis} sats for $${usdAmount.toFixed(5)} USD`);
+      } else {
+        // Swapping USD to satoshis
+        const usdAmount = amount;
+        if (usdAmount > usdBalance) {
+          toast.error("Insufficient USD balance");
+          return;
+        }
+
+        toast.info("Processing swap...");
+        const result = await swapFunds("usd-to-bsv", usdAmount, authFetch);
+
+        setBsvBalanceSats(result.bsvBalance);
+        setUsdBalance(result.usdBalance);
+
+        const satoshis = Math.floor((usdAmount / BSV_USD_RATE) * SATOSHIS_PER_BSV);
+        toast.success(`Swapped $${usdAmount.toFixed(5)} USD for ${satoshis} sats`);
       }
-      const usdAmount = (amount / SATOSHIS_PER_BSV) * BSV_USD_RATE;
-      setBsvBalanceSats(prev => prev - amount);
-      setUsdBalance(prev => prev + usdAmount);
-      toast.success(`Swapped ${amount} sats for $${usdAmount.toFixed(2)}`);
-    } else {
-      // Swapping USD to satoshis
-      const usdAmount = Number.parseFloat(swapAmount);
-      if (Number.isNaN(usdAmount) || usdAmount > usdBalance) {
-        toast.error("Insufficient USD balance");
-        return;
-      }
-      const satsAmount = Math.floor((usdAmount / BSV_USD_RATE) * SATOSHIS_PER_BSV);
-      setUsdBalance(prev => prev - usdAmount);
-      setBsvBalanceSats(prev => prev + satsAmount);
-      toast.success(`Swapped $${usdAmount.toFixed(2)} for ${satsAmount} sats`);
+
+      setSwapAmount("");
+    } catch (error: any) {
+      console.error("Swap failed:", error);
+      toast.error(`Swap failed: ${error.message}`);
     }
-    setSwapAmount("");
   };
 
   const toggleSwapDirection = () => {
@@ -222,7 +252,7 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
                 <>
                   <p className="text-4xl font-bold text-primary">{bsvBalanceSats.toLocaleString()} sats</p>
                   <p className="text-muted-foreground mt-2">
-                    ≈ ${((bsvBalanceSats / SATOSHIS_PER_BSV) * BSV_USD_RATE).toFixed(2)} USD
+                    ≈ ${((bsvBalanceSats / SATOSHIS_PER_BSV) * BSV_USD_RATE).toFixed(5)} USD
                   </p>
                 </>
               )}
@@ -235,7 +265,7 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
               <CardDescription>US Dollar</CardDescription>
             </CardHeader>
             <CardContent>
-              <p className="text-4xl font-bold text-secondary">${usdBalance.toFixed(2)}</p>
+              <p className="text-4xl font-bold text-secondary">${usdBalance.toFixed(5)}</p>
               <p className="text-muted-foreground mt-2">
                 ≈ {Math.floor((usdBalance / BSV_USD_RATE) * SATOSHIS_PER_BSV).toLocaleString()} sats
               </p>
@@ -252,46 +282,67 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
             </CardTitle>
             <CardDescription>Exchange rate: 1 BSV = ${BSV_USD_RATE} USD</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="swap-amount">Amount</Label>
-              <Input
-                id="swap-amount"
-                type="number"
-                placeholder="0.00"
-                value={swapAmount}
-                onChange={(e) => setSwapAmount(e.target.value)}
-                className="bg-input border-border"
-              />
-            </div>
-            
-            <div className="flex items-center justify-center">
-              <Button
-                onClick={toggleSwapDirection}
-                variant="outline"
-                size="icon"
-                className="rounded-full"
-              >
-                <ArrowDownUp className="h-4 w-4" />
-              </Button>
-            </div>
+          <CardContent>
+            <div className="flex items-center gap-4">
+              {/* BSV Input */}
+              <div className="flex-1 space-y-2">
+                <Label htmlFor="swap-bsv">BSV (Satoshis)</Label>
+                <div className="p-4 bg-muted rounded-lg">
+                  <Input
+                    id="swap-bsv"
+                    type="number"
+                    placeholder="0"
+                    value={swapDirection === "bsv-to-usd" ? swapAmount : swapAmount && !Number.isNaN(Number.parseFloat(swapAmount)) ? Math.floor((Number.parseFloat(swapAmount) / BSV_USD_RATE) * SATOSHIS_PER_BSV).toString() : ""}
+                    onChange={(e) => {
+                      setSwapAmount(e.target.value)
+                      setSwapDirection("bsv-to-usd")
+                    }}
+                    className="bg-input border-border text-lg font-semibold"
+                  />
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Balance: {bsvBalanceSats.toLocaleString()} sats
+                  </p>
+                </div>
+              </div>
 
-            <div className="p-4 bg-muted rounded-lg">
-              <p className="text-sm text-muted-foreground">
-                {swapDirection === "bsv-to-usd" ? "Satoshis → USD" : "USD → Satoshis"}
-              </p>
-              <p className="text-lg font-semibold text-foreground">
-                {swapAmount && !Number.isNaN(Number.parseFloat(swapAmount))
-                  ? swapDirection === "bsv-to-usd"
-                    ? `≈ $${((Number.parseInt(swapAmount, 10) / SATOSHIS_PER_BSV) * BSV_USD_RATE).toFixed(2)} USD`
-                    : `≈ ${Math.floor((Number.parseFloat(swapAmount) / BSV_USD_RATE) * SATOSHIS_PER_BSV).toLocaleString()} sats`
-                  : "Enter amount"}
-              </p>
+              {/* Swap Button */}
+              <div className="flex flex-col items-center gap-2 pt-8">
+                <Button
+                  onClick={toggleSwapDirection}
+                  variant="outline"
+                  size="icon"
+                  className="rounded-full"
+                >
+                  <ArrowDownUp className="h-4 w-4" />
+                </Button>
+              </div>
+
+              {/* USD Input */}
+              <div className="flex-1 space-y-2">
+                <Label htmlFor="swap-usd">USD</Label>
+                <div className="p-4 bg-muted rounded-lg">
+                  <Input
+                    id="swap-usd"
+                    type="number"
+                    placeholder="0.00000"
+                    step="0.00001"
+                    value={swapDirection === "usd-to-bsv" ? swapAmount : swapAmount && !Number.isNaN(Number.parseInt(swapAmount, 10)) ? ((Number.parseInt(swapAmount, 10) / SATOSHIS_PER_BSV) * BSV_USD_RATE).toFixed(5) : ""}
+                    onChange={(e) => {
+                      setSwapAmount(e.target.value)
+                      setSwapDirection("usd-to-bsv")
+                    }}
+                    className="bg-input border-border text-lg font-semibold"
+                  />
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Balance: ${usdBalance.toFixed(5)}
+                  </p>
+                </div>
+              </div>
             </div>
 
             <Button
               onClick={handleSwap}
-              className="w-full bg-gradient-primary hover:opacity-90 text-primary-foreground font-semibold"
+              className="w-full mt-4 bg-gradient-primary hover:opacity-90 text-primary-foreground font-semibold"
             >
               Swap {swapDirection === "bsv-to-usd" ? "Sats to USD" : "USD to Sats"}
             </Button>
@@ -376,7 +427,7 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
         </div>
 
         {/* Transaction History */}
-        <TransactionHistory authFetch={authFetch} />
+        <TransactionHistory authFetch={authFetch} refreshKey={transactionRefreshKey} />
       </div>
     </div>
   );

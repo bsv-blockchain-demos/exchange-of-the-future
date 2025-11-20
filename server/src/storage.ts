@@ -3,6 +3,7 @@ import { MongoClient, Db, Collection } from 'mongodb'
 interface BalanceDocument {
   identityKey: string
   balance: number
+  usdBalance: number
   updatedAt: Date
 }
 
@@ -160,5 +161,114 @@ export class BalanceStorage {
     const newBalance = result.balance
     console.log({ subtractBalance: { identityKey, amount, newBalance } })
     return newBalance
+  }
+
+  /**
+   * Get user USD balance by identity key
+   * @param identityKey - User's public identity key
+   * @returns USD balance (default 0)
+   */
+  async getUsdBalance(identityKey: string): Promise<number> {
+    try {
+      if (!this.collection) {
+        throw new Error('MongoDB not connected. Call connect() first.')
+      }
+
+      const doc = await this.collection.findOne({ identityKey })
+      const usdBalance = doc?.usdBalance ?? 0
+      console.log({ getUsdBalance: { identityKey, usdBalance } })
+      return usdBalance
+    } catch (error) {
+      console.error(`Error getting USD balance for ${identityKey}:`, error)
+      return 0
+    }
+  }
+
+  /**
+   * Swap BSV to USD (atomic operation)
+   * @param identityKey - User's public identity key
+   * @param satoshis - Amount of satoshis to swap
+   * @param usdAmount - Amount of USD to receive
+   * @returns Object with new balances
+   */
+  async swapBsvToUsd(identityKey: string, satoshis: number, usdAmount: number): Promise<{ bsvBalance: number, usdBalance: number }> {
+    if (!this.collection) {
+      throw new Error('MongoDB not connected. Call connect() first.')
+    }
+
+    // First check if user has sufficient BSV balance
+    const currentDoc = await this.collection.findOne({ identityKey })
+    const currentBalance = currentDoc?.balance ?? 0
+
+    if (currentBalance < satoshis) {
+      throw new Error(`Insufficient BSV balance: has ${currentBalance}, needs ${satoshis}`)
+    }
+
+    // Perform atomic swap
+    const result = await this.collection.findOneAndUpdate(
+      {
+        identityKey,
+        balance: { $gte: satoshis }
+      },
+      {
+        $inc: { balance: -satoshis, usdBalance: usdAmount },
+        $set: { updatedAt: new Date() }
+      },
+      {
+        returnDocument: 'after',
+        upsert: true
+      }
+    )
+
+    if (!result) {
+      throw new Error(`Insufficient balance: concurrent modification detected`)
+    }
+
+    console.log({ swapBsvToUsd: { identityKey, satoshis, usdAmount, newBsvBalance: result.balance, newUsdBalance: result.usdBalance } })
+    return { bsvBalance: result.balance, usdBalance: result.usdBalance ?? 0 }
+  }
+
+  /**
+   * Swap USD to BSV (atomic operation)
+   * @param identityKey - User's public identity key
+   * @param usdAmount - Amount of USD to swap
+   * @param satoshis - Amount of satoshis to receive
+   * @returns Object with new balances
+   */
+  async swapUsdToBsv(identityKey: string, usdAmount: number, satoshis: number): Promise<{ bsvBalance: number, usdBalance: number }> {
+    if (!this.collection) {
+      throw new Error('MongoDB not connected. Call connect() first.')
+    }
+
+    // First check if user has sufficient USD balance
+    const currentDoc = await this.collection.findOne({ identityKey })
+    const currentUsdBalance = currentDoc?.usdBalance ?? 0
+
+    if (currentUsdBalance < usdAmount) {
+      throw new Error(`Insufficient USD balance: has ${currentUsdBalance}, needs ${usdAmount}`)
+    }
+
+    // Perform atomic swap
+    const result = await this.collection.findOneAndUpdate(
+      {
+        identityKey,
+        usdBalance: { $gte: usdAmount }
+      },
+      {
+        $inc: { usdBalance: -usdAmount, balance: satoshis },
+        $set: { updatedAt: new Date() }
+      },
+      {
+        returnDocument: 'after',
+        upsert: true
+      }
+    )
+
+    if (!result) {
+      throw new Error(`Insufficient USD balance: concurrent modification detected`)
+    }
+
+    console.log({ swapUsdToBsv: { identityKey, usdAmount, satoshis, newBsvBalance: result.balance, newUsdBalance: result.usdBalance } })
+    return { bsvBalance: result.balance ?? 0, usdBalance: result.usdBalance ?? 0 }
   }
 }

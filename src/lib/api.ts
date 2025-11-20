@@ -49,6 +49,7 @@ export async function depositPayment(
 export async function getBalance(auth: AuthFetch): Promise<{
   serverIdentityKey: string
   balance: number
+  usdBalance: number
 }> {
   const response = await auth.fetch(`${API_BASE}/balance`)
 
@@ -122,6 +123,35 @@ export async function getTransactions(auth: AuthFetch): Promise<{
   if (!response.ok) {
     const error = await response.json()
     throw new Error(error.error || 'Failed to fetch transactions')
+  }
+
+  return response.json()
+}
+
+/**
+ * Swap between BSV and USD
+ */
+export async function swapFunds(
+  direction: 'bsv-to-usd' | 'usd-to-bsv',
+  amount: number,
+  auth: AuthFetch
+): Promise<{
+  success: boolean
+  bsvBalance: number
+  usdBalance: number
+  direction: string
+}> {
+  const response = await auth.fetch(`${API_BASE}/swap`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ direction, amount }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.error || 'Swap failed')
   }
 
   return response.json()
