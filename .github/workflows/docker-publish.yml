@@ -56,3 +56,14 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:${{ github.sha }}
             ghcr.io/${{ github.repository }}:${{ needs.get_tag.outputs.deployment_tag }}
+
+      - name: Build and push backend Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./server # Build context (root directory, adjust if Dockerfile is elsewhere)
+          file: ./server/Dockerfile # Path to Dockerfile
+          push: ${{ github.event_name != 'pull_request' }} # Only push on push events, not PRs
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}-backend:${{ needs.get_tag.outputs.deployment_tag }}
+
