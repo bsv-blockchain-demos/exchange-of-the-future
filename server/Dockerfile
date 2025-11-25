@@ -30,9 +30,6 @@ RUN npm ci --omit=dev
 # Copy built server from build stage
 COPY --from=base /app/server/dist ./server/dist
 
-# Copy environment template (will be overridden by docker-compose)
-COPY .env.example ./.env
-
 EXPOSE 3000
 
 CMD ["node", "server/dist/index.js"]
