@@ -1,6 +1,6 @@
 import { InternalizeActionArgs, AuthFetch } from '@bsv/sdk'
 
-const API_BASE = process.env.REACT_APP_API_BASE || '/api';
+const API_BASE = process.env.REACT_APP_API_BASE || (window?.location?.origin || '') + '/api';
 
 /**
  * Payment token format matching PeerPayClient
