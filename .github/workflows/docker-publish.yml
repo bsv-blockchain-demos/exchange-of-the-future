@@ -56,6 +56,8 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:${{ github.sha }}
             ghcr.io/${{ github.repository }}:${{ needs.get_tag.outputs.deployment_tag }}
+          build-args: |
+            VITE_API_BASE=${{ vars.VITE_API_BASE }}
 
       - name: Build and push backend Docker image
         uses: docker/build-push-action@v5

@@ -27,9 +27,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: bsv-exchange-frontend
-    environment:
-      - REACT_APP_API_BASE=http://localhost:3000
+      args:
+        - VITE_API_BASE=http://localhost:3000
     ports:
       - "8080:80"
     restart: unless-stopped

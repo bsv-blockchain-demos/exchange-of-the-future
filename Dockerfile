@@ -12,6 +12,10 @@ RUN npm ci
 # Copy source code
 COPY . .
 
+# Build arguments
+ARG VITE_API_BASE
+ENV VITE_API_BASE=$VITE_API_BASE
+
 # Build the frontend
 RUN npm run build
 
