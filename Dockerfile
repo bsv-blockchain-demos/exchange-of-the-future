@@ -19,15 +19,17 @@ ENV VITE_API_BASE=$VITE_API_BASE
 # Build the frontend
 RUN npm run build
 
-# Production stage with nginx
-FROM nginx:alpine AS production
+# Production stage - simple static server
+FROM node:20-alpine AS production
+
+WORKDIR /app
+
+# Install serve globally
+RUN npm install -g serve
 
 # Copy built assets from build stage
-COPY --from=build /app/dist /usr/share/nginx/html
+COPY --from=build /app/dist ./dist
 
-# Copy nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 3000
 
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["serve", "-s", "dist", "-l", "3000"]
