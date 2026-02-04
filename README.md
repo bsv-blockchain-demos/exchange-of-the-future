@@ -16,64 +16,58 @@ The application implements a complete BSV exchange with:
 - **Transaction History**: Track all deposits and withdrawals
 - **Authentication**: BRC-103 identity authentication using @bsv/auth-express-middleware
 
-## How can I edit this code?
-
-**Use your preferred IDE**
-
-Clone this repository and start developing locally. The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+## Quick Start
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
+# Clone the repository
 git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
 cd <YOUR_PROJECT_NAME>
 
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Configure environment variables
+# Configure environment variables
 cp .env.example .env
 # Edit .env with your BSV wallet private key and other settings
 
-# Step 5: Start the development server with auto-reloading and an instant preview.
-# Option A: Start frontend only
-npm run dev
-
-# Option B: Start both frontend and backend
-npm run dev:all
+# Build and run
+docker compose up -d --build
 ```
 
-### Running with Docker
+That's it! Access the application at:
+- **Frontend**: http://localhost:8080
+- **Backend API**: http://localhost:3000
 
-For production deployment or to run all services together (frontend, backend, and MongoDB):
+### Docker Commands
 
 ```sh
-# Build and start all services (frontend, backend, MongoDB)
-docker-compose up -d
-
 # View logs
-docker-compose logs -f
+docker compose logs -f
 
 # View specific service logs
-docker-compose logs -f backend
-docker-compose logs -f mongodb
+docker compose logs -f backend
+docker compose logs -f mongodb
 
 # Stop services
-docker-compose down
+docker compose down
 
 # Stop and remove volumes (including MongoDB data)
-docker-compose down -v
+docker compose down -v
 ```
 
-The docker-compose setup includes:
-- Frontend (React) on port 8080
-- Backend (Express) on port 3000
-- MongoDB on port 27017 with persistent volume
-
 See [DOCKER.md](DOCKER.md) for complete Docker deployment guide.
+
+## Local Development
+
+For local development without Docker, you'll need Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+
+```sh
+# Install dependencies
+npm i
+
+# Start frontend only
+npm run dev
+
+# Or start both frontend and backend
+npm run dev:all
+```
 
 ## Environment Variables
 
@@ -136,26 +130,15 @@ See [.env.example](.env.example) for a template.
 
 ## How can I deploy this project?
 
-### Option 1: Docker Deployment (Full Stack)
-
-Deploy both frontend and backend using Docker:
+### Docker Deployment (Recommended)
 
 ```bash
-# Configure environment
-cp .env.example .env
-# Edit .env with your settings
-
-# Build and start services
-docker-compose up -d
-
-# Access the application
-# Frontend: http://localhost:8080
-# Backend API: http://localhost:3000
+docker compose up -d --build
 ```
 
 See [DOCKER.md](DOCKER.md) for production deployment guide.
 
-### Option 2: Manual Deployment
+### Manual Deployment
 
 **Backend**:
 ```bash
