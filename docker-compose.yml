@@ -26,6 +26,8 @@ services:
       - STORAGE_URL=${STORAGE_URL}
       - PRIVATE_KEY=${PRIVATE_KEY}
       - MONGODB_URI=mongodb://mongodb:27017/bsv_exchange
+    ports:
+      - "3000:3000"
     env_file:
       - .env
     restart: unless-stopped
@@ -41,7 +43,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        - VITE_API_BASE=/api
+        - VITE_API_BASE=http://localhost:3000
     restart: unless-stopped
     networks:
       - bsv-network
