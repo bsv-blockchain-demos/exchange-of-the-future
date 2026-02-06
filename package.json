@@ -15,9 +15,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@bsv/auth-express-middleware": "^1.2.3",
-    "@bsv/sdk": "^1.9.9",
-    "@bsv/wallet-toolbox": "^1.7.12",
+    "@bsv/auth-express-middleware": "^2.0.2",
+    "@bsv/sdk": "^2.0.1",
+    "@bsv/wallet-toolbox": "^2.0.4",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "^1.2.11",
     "@radix-ui/react-alert-dialog": "^1.1.14",
