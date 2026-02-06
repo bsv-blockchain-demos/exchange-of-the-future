@@ -1,4 +1,5 @@
 import { InternalizeActionArgs, AuthFetch } from '@bsv/sdk'
+import { SignedKycAuthorization, KycStatusInfo, KycCertificate } from './kyc'
 
 const API_BASE = import.meta.env.VITE_API_BASE!;
 
@@ -16,10 +17,12 @@ export interface PaymentToken {
 
 /**
  * Deposit a payment to the backend
+ * Requires presenting an Identity Certificate for KYC verification
  */
 export async function depositPayment(
   paymentToken: PaymentToken,
-  auth: AuthFetch
+  auth: AuthFetch,
+  certificate: KycCertificate
 ): Promise<{
   success: boolean
   txid: string
@@ -27,17 +30,23 @@ export async function depositPayment(
   newBalance: number
   message: string
 }> {
+  // Include certificate in the deposit request
+  const depositRequest = {
+    ...paymentToken,
+    certificate,
+  }
+
   const response = await auth.fetch(`${API_BASE}/deposit`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(paymentToken),
+    body: JSON.stringify(depositRequest),
   })
 
   if (!response.ok) {
     const error = await response.json()
-    throw new Error(error.error || 'Deposit failed')
+    throw new Error(error.error || error.reason || 'Deposit failed')
   }
 
   return response.json()
@@ -152,6 +161,124 @@ export async function swapFunds(
   if (!response.ok) {
     const error = await response.json()
     throw new Error(error.error || 'Swap failed')
+  }
+
+  return response.json()
+}
+
+// ============================================================================
+// KYC API Functions
+// ============================================================================
+
+// KycCertificate is imported from ./kyc
+
+/**
+ * Sanctions check result
+ */
+export interface SanctionsResult {
+  sanctioned: boolean
+  matchedEntity: string | null
+  checkedAt: string
+  source: string
+}
+
+/**
+ * Get KYC status for the authenticated user
+ */
+export async function getKycStatus(auth: AuthFetch): Promise<KycStatusInfo> {
+  const response = await auth.fetch(`${API_BASE}/kyc/status`)
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      // No KYC record found - this is expected for new users
+      return {
+        status: 'not_verified',
+        message: 'KYC verification required before depositing',
+        canDeposit: false,
+      }
+    }
+    const error = await response.json()
+    throw new Error(error.error || 'Failed to get KYC status')
+  }
+
+  return response.json()
+}
+
+/**
+ * Submit KYC verification to TrustFlow
+ */
+export async function submitKycVerification(
+  signedAuth: SignedKycAuthorization,
+  auth: AuthFetch
+): Promise<{
+  success: boolean
+  certificate?: KycCertificate
+  sanctionsResult?: SanctionsResult
+  error?: string
+}> {
+  const response = await auth.fetch(`${API_BASE}/trustflow/verify`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(signedAuth),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    return {
+      success: false,
+      error: error.error || 'KYC verification failed',
+    }
+  }
+
+  return response.json()
+}
+
+/**
+ * Check certificate revocation status
+ */
+export async function checkCertificateStatus(
+  serialNumber: string,
+  auth: AuthFetch
+): Promise<{
+  success: boolean
+  revoked: boolean
+  certificate?: KycCertificate
+  sanctionsStatus?: string
+  error?: string
+}> {
+  const response = await auth.fetch(`${API_BASE}/trustflow/status/${serialNumber}`)
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.error || 'Failed to check certificate status')
+  }
+
+  return response.json()
+}
+
+/**
+ * Revoke a KYC certificate
+ */
+export async function revokeKycCertificate(
+  serialNumber: string,
+  auth: AuthFetch
+): Promise<{
+  success: boolean
+  message?: string
+  error?: string
+}> {
+  const response = await auth.fetch(`${API_BASE}/trustflow/revoke/${serialNumber}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.error || 'Failed to revoke certificate')
   }
 
   return response.json()

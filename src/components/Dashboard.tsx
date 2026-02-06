@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ArrowDownUp, LogOut, Wallet, TrendingUp, Send, Loader2 } from "lucide-react";
+import { ArrowDownUp, LogOut, Wallet, TrendingUp, Send, Loader2, ShieldAlert, ShieldCheck, FileCheck, FileX } from "lucide-react";
 import { toast } from "sonner";
 import { depositPayment, getBalance, withdrawFunds, swapFunds } from "@/lib/api";
 import {
@@ -13,6 +13,8 @@ import {
 import { AuthFetch } from "@bsv/sdk";
 import { useWallet } from "@/hooks/use-wallet";
 import { TransactionHistory } from "@/components/TransactionHistory";
+import { KycCheck } from "@/components/KycCheck";
+import { KycStatusInfo, loadCertificateFromLocalStorage, KycCertificate } from "@/lib/kyc";
 
 
 interface DashboardProps {
@@ -36,8 +38,18 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
   const [authFetch, setAuthFetch] = useState<AuthFetch | null>(null);
   const [serverIdentityKey, setServerIdentityKey] = useState<string>("");
   const [transactionRefreshKey, setTransactionRefreshKey] = useState(0);
+  const [kycStatus, setKycStatus] = useState<KycStatusInfo | null>(null);
+  const [certificate, setCertificate] = useState<KycCertificate | null>(null);
 
   const { wallet } = useWallet();
+
+  // Load certificate from localStorage when KYC status changes
+  const handleKycStatusChange = useCallback((status: KycStatusInfo) => {
+    setKycStatus(status);
+    // Reload certificate from localStorage
+    const cert = loadCertificateFromLocalStorage();
+    setCertificate(cert);
+  }, []);
 
   // Load balance from backend on mount
   useEffect(() => {
@@ -69,6 +81,11 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
       return;
     }
 
+    if (!certificate) {
+      toast.error("No certificate loaded. Get one from the Certification Company.");
+      return;
+    }
+
     const amountSatoshis = Number.parseInt(depositAmount, 10);
     if (Number.isNaN(amountSatoshis) || amountSatoshis < 1 || amountSatoshis > 1000) {
       toast.error("Please enter a valid amount between 1 and 1000 satoshis");
@@ -87,10 +104,10 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
         serverIdentityKey
       );
 
-      toast.info("Sending deposit to server...");
+      toast.info("Presenting certificate and sending deposit...");
 
-      // Send to backend
-      const result = await depositPayment(paymentToken, authFetch);
+      // Send to backend with certificate
+      const result = await depositPayment(paymentToken, authFetch, certificate);
 
       // Update local balance from server response (already in satoshis)
       setBsvBalanceSats(result.newBalance);
@@ -349,6 +366,59 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
           </CardContent>
         </Card>
 
+        {/* Certification Company - Get Certificate */}
+        <KycCheck
+          authFetch={authFetch}
+          serverIdentityKey={serverIdentityKey}
+          onKycStatusChange={handleKycStatusChange}
+        />
+
+        {/* Exchange: Certificate Presentation */}
+        <Card className="bg-gradient-card backdrop-blur-lg border-border">
+          <CardHeader>
+            <CardTitle className="flex items-center text-foreground">
+              <ShieldCheck className="mr-2 h-5 w-5 text-primary" />
+              Exchange: Certificate Presentation
+            </CardTitle>
+            <CardDescription>
+              Present your Identity Certificate to enable deposits at this exchange.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {certificate ? (
+              <div className="p-4 rounded-lg border border-green-200 bg-green-50">
+                <div className="flex items-center gap-2 mb-3">
+                  <FileCheck className="h-5 w-5 text-green-600" />
+                  <span className="font-medium text-green-800">Certificate Loaded</span>
+                </div>
+                <div className="text-sm text-green-700 space-y-1">
+                  <p><strong>Name:</strong> {certificate.fields.officialName}</p>
+                  <p><strong>Status:</strong> {certificate.fields.sanctionsStatus === 'clear' ? 'Clear' : 'Sanctioned'}</p>
+                  <p><strong>Expires:</strong> {new Date(certificate.fields.expiresAt).toLocaleString()}</p>
+                  <p className="text-xs text-green-600 mt-2">
+                    Serial: {certificate.fields.serialNumber.slice(0, 8)}...
+                  </p>
+                </div>
+                {certificate.fields.sanctionsStatus === 'matched' && (
+                  <div className="mt-3 p-2 rounded bg-red-100 text-red-700 text-sm">
+                    Sanctions match detected. Deposits are blocked.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="p-4 rounded-lg border border-yellow-200 bg-yellow-50">
+                <div className="flex items-center gap-2 mb-2">
+                  <FileX className="h-5 w-5 text-yellow-600" />
+                  <span className="font-medium text-yellow-800">No Certificate Loaded</span>
+                </div>
+                <p className="text-sm text-yellow-700">
+                  Get a certificate from the Certification Company above to enable deposits.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Deposit & Withdraw */}
         <div className="grid md:grid-cols-2 gap-6">
           <Card className="bg-gradient-card backdrop-blur-lg border-border">
@@ -357,6 +427,13 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
               <CardDescription>Add funds to your exchange balance (1-1000 satoshis)</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Certificate Warning if not loaded */}
+              {(!certificate || !kycStatus?.canDeposit) && (
+                <div className="p-3 rounded-lg bg-yellow-50 border border-yellow-200 text-yellow-800 text-sm flex items-center gap-2">
+                  <ShieldAlert className="h-4 w-4" />
+                  <span>Get a certificate from the Certification Company to enable deposits</span>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="deposit-amount">Amount (satoshis)</Label>
                 <Input
@@ -368,11 +445,12 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
                   value={depositAmount}
                   onChange={(e) => setDepositAmount(e.target.value)}
                   className="bg-input border-border"
+                  disabled={!certificate || !kycStatus?.canDeposit}
                 />
               </div>
               <Button
                 onClick={handleDeposit}
-                disabled={isDepositing || isLoadingBalance}
+                disabled={isDepositing || isLoadingBalance || !certificate || !kycStatus?.canDeposit}
                 className="w-full bg-primary hover:bg-primary/90 text-primary-foreground"
               >
                 {isDepositing ? (
