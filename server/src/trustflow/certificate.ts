@@ -155,7 +155,7 @@ export async function createRevocationAnchor(
   return {
     txid,
     vout: 0,
-    tx: action.tx,
+    tx: Array.from(action.tx),
   }
 }
 
