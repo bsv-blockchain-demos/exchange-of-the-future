@@ -115,7 +115,7 @@ export function createTrustFlowRouter(
       }
 
       // 5. Check sanctions
-      const sanctionsResult = checkSanctions(officialName)
+      const sanctionsResult = await checkSanctions(officialName)
 
       // 6. Create certificate
       const certificate = createKycCertificate(

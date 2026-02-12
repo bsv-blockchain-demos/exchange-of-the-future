@@ -67,10 +67,74 @@ services:
       timeout: 5s
       retries: 5
 
+  open-sanctions-index:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
+    expose:
+      - "9200"
+    ports:
+      - "127.0.0.1:9200:9200"
+    container_name: index
+    environment:
+      - node.name=index
+      - cluster.name=opensanctions-index
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - index-os-data:/usr/share/elasticsearch/data
+    healthcheck:
+      # curl --fail exits with an exit code >0 if anything about the request fails
+      test: ["CMD-SHELL", "curl --fail http://localhost:9200/_cluster/health || exit 1"]
+    deploy:
+      placement:
+        max_replicas_per_node: 1
+      restart_policy:
+        condition: on-failure
+
+  open-sanctions-api:
+    image: ghcr.io/opensanctions/yente:5.2.0
+    depends_on:
+      open-sanctions-index:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      YENTE_INDEX_TYPE: "elasticsearch"
+      YENTE_INDEX_URL: http://open-sanctions-index:9200
+      YENTE_MANIFEST: /app/manifests/civic.yml
+      # Get your delivery token from the customer portal: https://www.opensanctions.org/account/
+      OPENSANCTIONS_DELIVERY_TOKEN: "1ed271531638ac306e61f3193bbdcdc1"
+    # If you want to index data from the host machine as a custom dataset,
+    # create a volume mount here to make that data accessible from the
+    # container:
+    # volumes:
+    #   - "/path/on/the/host/computer:/data"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/healthz" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 3s
+    deploy:
+      mode: replicated
+      # Run multiple instances for better scale:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+
 networks:
   bsv-network:
     driver: bridge
 
 volumes:
+  index-os-data: null
   mongodb_data:
     driver: local

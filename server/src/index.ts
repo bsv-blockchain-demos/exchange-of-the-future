@@ -155,7 +155,7 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
 
     // 6. Re-check sanctions using the name from certificate
     const officialName = certificate.fields.officialName
-    const sanctionsRecheck = checkSanctions(officialName)
+    const sanctionsRecheck = await checkSanctions(officialName)
 
     if (sanctionsRecheck.sanctioned) {
       console.log(`[Deposit] Blocked - Sanctions re-check failed for ${officialName}`)

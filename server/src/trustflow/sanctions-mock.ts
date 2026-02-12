@@ -1,55 +1,91 @@
 /**
- * Mock OpenSanctions API for KYC/Sanctions demo
- * In production, this would call the real OpenSanctions API
+ * OpenSanctions (yente) API integration for KYC/Sanctions screening
+ * Calls the yente /match/default endpoint at localhost:8000
  */
 
-// List of sanctioned names for demo purposes
-const SANCTIONED_NAMES = [
-  'sanctioned person',
-  'ivan blocked',
-  'kim jong-un',
-  'kim jong un',
-  'test sanctioned',
-  'blocked user',
-  'vladimir sanctioned',
-]
+const YENTE_BASE_URL = process.env.YENTE_URL || 'http://localhost:8000'
+const MATCH_SCORE_THRESHOLD = 0.7
 
 export interface SanctionsCheckResult {
   sanctioned: boolean
   matchedEntity: string | null
   checkedAt: string
   source: string
+  score?: number
 }
 
 /**
- * Check if a name appears on the mock sanctions list
- * @param name - The name to check (case-insensitive)
- * @returns SanctionsCheckResult with sanctioned status
+ * Build a yente match request body from a name string.
+ * Splits the name into firstName / lastName parts.
  */
-export function checkSanctions(name: string): SanctionsCheckResult {
-  const normalizedName = name.toLowerCase().trim()
+function buildMatchPayload(name: string): object {
+  const parts = name.trim().split(/\s+/)
+  const firstName = parts[0] || name
+  const lastName = parts.length > 1 ? parts.slice(1).join(' ') : undefined
 
-  // Check for exact or partial matches
-  const matchedEntity = SANCTIONED_NAMES.find(sanctionedName =>
-    normalizedName.includes(sanctionedName) ||
-    sanctionedName.includes(normalizedName)
-  )
-
-  const result: SanctionsCheckResult = {
-    sanctioned: !!matchedEntity,
-    matchedEntity: matchedEntity || null,
-    checkedAt: new Date().toISOString(),
-    source: 'mock-opensanctions-api'
+  const properties: Record<string, string[]> = {
+    name: [name],
+    firstName: [firstName],
+  }
+  if (lastName) {
+    properties.lastName = [lastName]
   }
 
-  console.log(`[TrustFlow] Sanctions check for "${name}":`, result)
-
-  return result
+  return {
+    schema: 'Person',
+    properties,
+  }
 }
 
 /**
- * Get the list of sanctioned names (for demo/testing purposes)
+ * Check if a name appears on sanctions lists via the yente API
+ * @param name - The name to check
+ * @returns SanctionsCheckResult with sanctioned status
  */
-export function getSanctionedNames(): string[] {
-  return [...SANCTIONED_NAMES]
+export async function checkSanctions(name: string): Promise<SanctionsCheckResult> {
+  const payload = buildMatchPayload(name)
+
+  console.log(`[TrustFlow] Sanctions check for "${name}" via ${YENTE_BASE_URL}/match/default`)
+
+  try {
+    const response = await fetch(`${YENTE_BASE_URL}/match/default`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    if (!response.ok) {
+      throw new Error(`yente API returned ${response.status}: ${response.statusText}`)
+    }
+
+    const data = await response.json() as {
+      results?: Array<{ id: string; caption: string; score: number }>
+    }
+
+    console.log({ data })
+
+    const topMatch = data.results?.[0]
+    const sanctioned = !!topMatch && topMatch.score >= MATCH_SCORE_THRESHOLD
+
+    const result: SanctionsCheckResult = {
+      sanctioned,
+      matchedEntity: sanctioned ? topMatch.caption : null,
+      checkedAt: new Date().toISOString(),
+      source: 'opensanctions-yente',
+      score: topMatch?.score,
+    }
+
+    console.log(`[TrustFlow] Sanctions result:`, result)
+    return result
+  } catch (error: any) {
+    console.error(`[TrustFlow] Sanctions API error:`, error.message)
+
+    // Fail open with a warning — in production you may want to fail closed
+    return {
+      sanctioned: false,
+      matchedEntity: null,
+      checkedAt: new Date().toISOString(),
+      source: 'opensanctions-yente (unavailable)',
+    }
+  }
 }
