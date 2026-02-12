@@ -6,7 +6,7 @@ import { makeWallet } from './wallet.js'
 import { BalanceStorage } from './storage.js'
 import { KycStorage } from './kyc-storage.js'
 import { createTrustFlowRouter } from './trustflow/index.js'
-import { checkSanctions } from './trustflow/sanctions-mock.js'
+import { checkSanctions } from './trustflow/sanctions.js'
 import { checkRevocationStatus, isCertificateExpired, KycCertificate } from './trustflow/certificate.js'
 
 // Load environment variables

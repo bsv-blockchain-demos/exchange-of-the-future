@@ -4,7 +4,7 @@
 
 import { MongoClient, Db, Collection } from 'mongodb'
 import { KycCertificate } from './trustflow/certificate.js'
-import { SanctionsCheckResult } from './trustflow/sanctions-mock.js'
+import { SanctionsCheckResult } from './trustflow/sanctions.js'
 
 export interface KycRecord {
   identityKey: string

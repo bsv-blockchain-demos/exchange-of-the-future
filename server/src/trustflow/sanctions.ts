@@ -48,23 +48,27 @@ export async function checkSanctions(name: string): Promise<SanctionsCheckResult
   console.log(`[TrustFlow] Sanctions check for "${name}" via ${YENTE_BASE_URL}/match/default`)
 
   try {
+    const body = { queries: { q1: payload } }
     const response = await fetch(`${YENTE_BASE_URL}/match/default`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(body),
     })
 
     if (!response.ok) {
-      throw new Error(`yente API returned ${response.status}: ${response.statusText}`)
+      const text = await response.text()
+      throw new Error(`yente API returned ${response.status}: ${text}`)
     }
 
     const data = await response.json() as {
-      results?: Array<{ id: string; caption: string; score: number }>
+      responses: Record<string, {
+        results: Array<{ id: string; caption: string; score: number }>
+      }>
     }
 
-    console.log({ data })
+    console.log('[TrustFlow] yente response:', JSON.stringify(data, null, 2))
 
-    const topMatch = data.results?.[0]
+    const topMatch = data.responses?.q1?.results?.[0]
     const sanctioned = !!topMatch && topMatch.score >= MATCH_SCORE_THRESHOLD
 
     const result: SanctionsCheckResult = {

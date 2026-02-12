@@ -6,7 +6,7 @@
 import { Router, Response } from 'express'
 import { AuthRequest } from '@bsv/auth-express-middleware'
 import { WalletInterface, Utils } from '@bsv/sdk'
-import { checkSanctions, SanctionsCheckResult } from './sanctions-mock.js'
+import { checkSanctions, SanctionsCheckResult } from './sanctions.js'
 import {
   createKycCertificate,
   createRevocationAnchor,
