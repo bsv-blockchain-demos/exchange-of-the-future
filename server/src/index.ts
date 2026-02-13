@@ -1,25 +1,24 @@
 import express, { Request, Response } from 'express'
 import dotenv from 'dotenv'
 import { createAuthMiddleware, AuthRequest } from '@bsv/auth-express-middleware'
-import { Transaction, P2PKH, PublicKey, InternalizeActionArgs, Random, Utils, WalletInterface } from '@bsv/sdk'
+import { Transaction, P2PKH, PublicKey, InternalizeActionArgs, Random, Utils, WalletInterface, VerifiableCertificate } from '@bsv/sdk'
+import type { WalletCertificate } from '@bsv/sdk'
 import { makeWallet } from './wallet.js'
 import { BalanceStorage } from './storage.js'
-import { KycStorage } from './kyc-storage.js'
-import { createTrustFlowRouter } from './trustflow/index.js'
 import { checkSanctions } from './trustflow/sanctions.js'
-import { checkRevocationStatus, isCertificateExpired, KycCertificate } from './trustflow/certificate.js'
+import { checkRevocationStatus } from './trustflow/certificate.js'
 
 // Load environment variables
 dotenv.config()
 const chain = process.env.CHAIN! as 'test' | 'main'
 const storageURL = process.env.STORAGE_URL!
 const privateKey = process.env.PRIVATE_KEY!
+const TRUSTED_CERTIFIER_KEY = process.env.TRUSTED_CERTIFIER_KEY!
 
 const app = express()
 const PORT = process.env.PORT || 3000
 
 let _balanceStorage: BalanceStorage;
-let _kycStorage: KycStorage;
 let _wallet: WalletInterface;
 // Middleware
 async function initializeWalletMiddleware(app: express.Application): Promise<void> {
@@ -28,14 +27,8 @@ async function initializeWalletMiddleware(app: express.Application): Promise<voi
   _wallet = await makeWallet(chain, storageURL, privateKey);
   _balanceStorage = new BalanceStorage();
   await _balanceStorage.connect();
-  _kycStorage = new KycStorage();
-  await _kycStorage.connect();
   const authMiddleware = createAuthMiddleware({ wallet: _wallet, logger: console, logLevel: 'debug', allowUnauthenticated: false })
   app.use(authMiddleware)
-
-  // Add TrustFlow routes
-  const trustFlowRouter = createTrustFlowRouter(_wallet, _kycStorage)
-  app.use('/trustflow', trustFlowRouter)
 }
 
 // CORS setup
@@ -69,10 +62,11 @@ export interface PaymentToken {
 }
 
 /**
- * Deposit request with certificate presentation
+ * Deposit request with proved certificate presentation
  */
 export interface DepositRequest extends PaymentToken {
-  certificate: KycCertificate  // User presents their certificate
+  certificate: WalletCertificate
+  keyringForVerifier: Record<string, string>
 }
 
 /**
@@ -91,18 +85,18 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
   try {
     const args = req.body as DepositRequest;
     const senderIdentityKey = req.auth.identityKey;
-    const { certificate } = args;
+    const { certificate, keyringForVerifier } = args;
 
     // =========================================================================
-    // CERTIFICATE VERIFICATION (User presents certificate to exchange)
+    // CERTIFICATE VERIFICATION (User proves certificate to exchange)
     // =========================================================================
 
-    // 1. Check if certificate was presented
-    if (!certificate) {
-      console.log(`[Deposit] Blocked - No certificate presented by ${senderIdentityKey.slice(0, 16)}...`)
+    // 1. Check if certificate and keyring were presented
+    if (!certificate || !keyringForVerifier) {
+      console.log(`[Deposit] Blocked - No certificate/keyring presented by ${senderIdentityKey.slice(0, 16)}...`)
       return res.status(403).json({
         error: 'Identity Certificate required',
-        reason: 'No certificate presented. Get one from the Certification Company.',
+        reason: 'No certificate presented. Get one from the certifier.',
         kycRequired: true
       })
     }
@@ -117,23 +111,24 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
       })
     }
 
-    // 3. Verify certificate was issued by this exchange (TrustFlow)
-    const { publicKey: serverIdentityKey } = await _wallet.getPublicKey({ identityKey: true })
-    if (certificate.certifier !== serverIdentityKey) {
-      console.log(`[Deposit] Blocked - Certificate not issued by this exchange for ${senderIdentityKey.slice(0, 16)}...`)
+    // 3. Verify certificate was issued by the trusted certifier
+    if (certificate.certifier !== TRUSTED_CERTIFIER_KEY) {
+      console.log(`[Deposit] Blocked - Untrusted certifier ${certificate.certifier.slice(0, 16)}...`)
       return res.status(403).json({
-        error: 'Invalid certificate issuer',
-        reason: 'Certificate was not issued by this Certification Company.',
+        error: 'Untrusted certificate issuer',
+        reason: 'Certificate was not issued by a trusted certifier.',
         kycRequired: true
       })
     }
 
-    // 4. Check certificate expiration
-    if (isCertificateExpired(certificate)) {
-      console.log(`[Deposit] Blocked - Certificate expired for ${senderIdentityKey.slice(0, 16)}...`)
+    // 4. Verify certificate signature
+    const verifiableCert = VerifiableCertificate.fromCertificate(certificate, keyringForVerifier)
+    const signatureValid = await verifiableCert.verify()
+    if (!signatureValid) {
+      console.log(`[Deposit] Blocked - Invalid certificate signature for ${senderIdentityKey.slice(0, 16)}...`)
       return res.status(403).json({
-        error: 'Certificate expired',
-        reason: 'Your certificate has expired. Please get a new one.',
+        error: 'Invalid certificate signature',
+        reason: 'Certificate signature verification failed.',
         kycRequired: true
       })
     }
@@ -143,8 +138,6 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
       const revocationCheck = await checkRevocationStatus(certificate.revocationOutpoint)
       if (revocationCheck.revoked) {
         console.log(`[Deposit] Blocked - Certificate revoked for ${senderIdentityKey.slice(0, 16)}...`)
-        // Also update audit record if exists
-        await _kycStorage.revokeKycRecord(certificate.fields.serialNumber).catch(() => {})
         return res.status(403).json({
           error: 'Certificate has been revoked',
           reason: 'Your certificate has been revoked on-chain.',
@@ -153,8 +146,20 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
       }
     }
 
-    // 6. Re-check sanctions using the name from certificate
-    const officialName = certificate.fields.officialName
+    // 6. Decrypt certificate fields using the verifier keyring
+    const decryptedFields = await verifiableCert.decryptFields(_wallet as any)
+    const officialName = decryptedFields.officialName
+
+    if (!officialName) {
+      console.log(`[Deposit] Blocked - No officialName in certificate for ${senderIdentityKey.slice(0, 16)}...`)
+      return res.status(403).json({
+        error: 'Certificate missing required fields',
+        reason: 'Certificate does not contain officialName field.',
+        kycRequired: true
+      })
+    }
+
+    // 7. Re-check sanctions using the decrypted name
     const sanctionsRecheck = await checkSanctions(officialName)
 
     if (sanctionsRecheck.sanctioned) {
@@ -266,82 +271,13 @@ app.get('/balance', async (req: AuthRequest, res: Response) => {
     return res.json({
       serverIdentityKey,
       balance,
-      usdBalance
+      usdBalance,
+      trustedCertifierKey: TRUSTED_CERTIFIER_KEY
     })
   } catch (error: any) {
     console.error('Balance check error:', error)
     return res.status(500).json({
       error: 'Failed to get balance',
-      details: error.message
-    })
-  }
-})
-
-/**
- * GET /kyc/status
- * Returns the KYC status for the authenticated user
- */
-app.get('/kyc/status', async (req: AuthRequest, res: Response) => {
-  try {
-    const { identityKey } = req.auth
-
-    if (!identityKey) {
-      return res.status(400).json({ error: 'Identity key is required' })
-    }
-
-    const kycResult = await _kycStorage.hasValidKyc(identityKey)
-
-    if (!kycResult.record) {
-      return res.status(404).json({
-        status: 'not_verified',
-        message: 'KYC verification required before depositing',
-        canDeposit: false,
-      })
-    }
-
-    // Determine status
-    let status: string
-    let message: string
-    let canDeposit: boolean
-
-    if (kycResult.record.revoked) {
-      status = 'revoked'
-      message = 'KYC certificate has been revoked'
-      canDeposit = false
-    } else if (isCertificateExpired(kycResult.record.certificate)) {
-      status = 'expired'
-      message = 'KYC certificate has expired'
-      canDeposit = false
-    } else if (kycResult.record.certificate.fields.sanctionsStatus === 'matched') {
-      status = 'sanctioned'
-      message = 'You are on the sanctions list. Deposits are blocked.'
-      canDeposit = false
-    } else if (kycResult.valid) {
-      status = 'verified'
-      message = 'KYC verification complete. You can deposit.'
-      canDeposit = true
-    } else {
-      status = 'not_verified'
-      message = kycResult.reason || 'KYC verification required'
-      canDeposit = false
-    }
-
-    return res.json({
-      status,
-      message,
-      canDeposit,
-      certificate: kycResult.record ? {
-        officialName: kycResult.record.certificate.fields.officialName,
-        serialNumber: kycResult.record.certificate.fields.serialNumber,
-        issuedAt: kycResult.record.certificate.fields.issuedAt,
-        expiresAt: kycResult.record.certificate.fields.expiresAt,
-        sanctionsStatus: kycResult.record.certificate.fields.sanctionsStatus,
-      } : undefined,
-    })
-  } catch (error: any) {
-    console.error('KYC status check error:', error)
-    return res.status(500).json({
-      error: 'Failed to get KYC status',
       details: error.message
     })
   }
@@ -589,18 +525,14 @@ app.get('/health', (_req: Request, res: Response) => {
 async function start() {
   app.listen(PORT, () => {
     console.log(`\n🚀 BSV Exchange Server running on http://localhost:${PORT}`)
+    console.log(`  Trusted certifier: ${TRUSTED_CERTIFIER_KEY?.slice(0, 16)}...`)
     console.log(`\nEndpoints:`)
-    console.log(`  POST   /deposit              - Accept a payment deposit (requires KYC)`)
-    console.log(`  GET    /balance              - Get user balance`)
+    console.log(`  POST   /deposit              - Accept a payment deposit (requires certificate)`)
+    console.log(`  GET    /balance              - Get user balance + trusted certifier key`)
     console.log(`  GET    /transactions         - Get transaction history (authenticated)`)
     console.log(`  POST   /swap                 - Swap between BSV and USD (authenticated)`)
     console.log(`  POST   /withdraw             - Withdraw funds (authenticated)`)
-    console.log(`  GET    /health               - Health check`)
-    console.log(`\nKYC Endpoints:`)
-    console.log(`  GET    /kyc/status           - Get KYC verification status`)
-    console.log(`  POST   /trustflow/verify     - Submit KYC verification`)
-    console.log(`  GET    /trustflow/status/:id - Check certificate status`)
-    console.log(`  POST   /trustflow/revoke/:id - Revoke a certificate\n`)
+    console.log(`  GET    /health               - Health check\n`)
   })
 }
 
@@ -610,9 +542,6 @@ process.on('SIGINT', async () => {
   if (_balanceStorage) {
     await _balanceStorage.disconnect()
   }
-  if (_kycStorage) {
-    await _kycStorage.disconnect()
-  }
   process.exit(0)
 })
 
@@ -620,9 +549,6 @@ process.on('SIGTERM', async () => {
   console.log('\n\nShutting down gracefully...')
   if (_balanceStorage) {
     await _balanceStorage.disconnect()
-  }
-  if (_kycStorage) {
-    await _kycStorage.disconnect()
   }
   process.exit(0)
 })
