@@ -15,6 +15,8 @@ import {
   ArrowLeft,
   ShieldCheck,
   Upload,
+  User,
+  CreditCard,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { WalletClient, AuthFetch, Utils } from '@bsv/sdk'
@@ -220,24 +222,57 @@ export function CertifierFlow({ identityKey }: CertifierFlowProps) {
                 <div
                   onClick={() => setDocumentUploaded(true)}
                   className={`
-                    border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all
+                    border-2 rounded-xl p-6 cursor-pointer transition-all
                     ${documentUploaded
-                      ? 'border-green-500/40 bg-green-950/20'
-                      : 'border-indigo-500/30 bg-slate-800/30 hover:border-indigo-400/50 hover:bg-slate-800/50'
+                      ? 'border-green-500/40 bg-green-950/20 border-solid'
+                      : 'border-dashed border-indigo-500/30 bg-slate-800/30 hover:border-indigo-400/50 hover:bg-slate-800/50'
                     }
                   `}
                 >
                   {documentUploaded ? (
-                    <div className="flex flex-col items-center gap-2">
-                      <CheckCircle className="h-10 w-10 text-green-400" />
-                      <p className="text-green-300 font-medium">Document uploaded</p>
-                      <p className="text-green-400/60 text-xs">Government-issued photo ID</p>
+                    <div className="flex items-center gap-4">
+                      {/* Mock ID card illustration */}
+                      <div className="flex-shrink-0 w-48 h-28 rounded-lg bg-gradient-to-br from-slate-700 to-slate-800 border border-slate-600/50 p-3 relative overflow-hidden">
+                        {/* Card header bar */}
+                        <div className="flex items-center gap-1.5 mb-2">
+                          <div className="w-4 h-4 rounded-full bg-indigo-500/60" />
+                          <div className="text-[9px] font-bold text-slate-400 tracking-widest uppercase">Government ID</div>
+                        </div>
+                        {/* Card body */}
+                        <div className="flex gap-2">
+                          {/* Photo placeholder */}
+                          <div className="w-10 h-12 rounded bg-slate-600/80 flex items-center justify-center flex-shrink-0">
+                            <User className="w-6 h-6 text-slate-400" />
+                          </div>
+                          {/* Text lines */}
+                          <div className="flex-1 space-y-1.5 pt-0.5">
+                            <div className="text-[8px] text-slate-300 font-medium truncate">{officialName || 'Full Name'}</div>
+                            <div className="h-1.5 w-full bg-slate-600/60 rounded" />
+                            <div className="h-1.5 w-3/4 bg-slate-600/60 rounded" />
+                            <div className="h-1.5 w-1/2 bg-slate-600/60 rounded" />
+                          </div>
+                        </div>
+                        {/* Checkmark overlay */}
+                        <div className="absolute top-2 right-2">
+                          <CheckCircle className="h-4 w-4 text-green-400" />
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-green-300 font-medium">Document uploaded</p>
+                        <p className="text-green-400/60 text-xs mt-1">Government-issued photo ID verified</p>
+                      </div>
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center gap-2">
-                      <Upload className="h-10 w-10 text-indigo-400/50" />
-                      <p className="text-indigo-300/70 font-medium">Click to upload ID document</p>
-                      <p className="text-indigo-400/40 text-xs">Passport, driver's license, or national ID</p>
+                    <div className="flex items-center gap-4">
+                      {/* Empty ID card placeholder */}
+                      <div className="flex-shrink-0 w-48 h-28 rounded-lg border-2 border-dashed border-indigo-500/20 bg-slate-800/40 flex flex-col items-center justify-center">
+                        <CreditCard className="h-8 w-8 text-indigo-400/30 mb-1" />
+                        <Upload className="h-4 w-4 text-indigo-400/40" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-indigo-300/70 font-medium">Click to upload ID document</p>
+                        <p className="text-indigo-400/40 text-xs mt-1">Passport, driver's license, or national ID</p>
+                      </div>
                     </div>
                   )}
                 </div>
