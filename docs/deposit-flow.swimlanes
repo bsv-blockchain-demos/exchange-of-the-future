@@ -1,0 +1,81 @@
+title: **BSV Swift Exchange — Direct Deposit Flow**
+
+note: **Peer-to-Peer Direct Payment**: The user's wallet constructs a transaction paying directly to the server's derived key. The server receives, validates, and broadcasts the transaction itself — **no address scanning, no watch addresses, no waiting for network propagation.**
+
+_: **1. Wallet Connection & Identity**
+
+User Wallet -> Frontend: Connect wallet
+Frontend -> User Wallet: getPublicKey({ identityKey: true })
+User Wallet -> Frontend: Return identity public key
+
+_: **2. KYC Certificate Issuance**
+
+Frontend -> User Wallet: Sign KYC authorization\n(protocol: `[2, 'KYC Authorization']`)
+User Wallet -> Frontend: Signed authorization message
+
+Frontend => Exchange Server: `POST /trustflow/verify`\n{ signedAuthorization, name }
+
+note: Server validates signature, checks timestamp freshness (< 5 min), then screens against sanctions database
+
+Exchange Server -> Sanctions API: `POST /match/default`\n{ name }
+Sanctions API --> Exchange Server: { sanctioned: false, score }
+
+Exchange Server -> BSV Network: `wallet.createAction()`\nBroadcast revocation anchor tx\n(1-of-2 multisig + OP_RETURN)
+
+Exchange Server => Frontend: KYC Certificate\n{ subject, certifier, fields, revocationOutpoint }
+
+note: Certificate stored in localStorage — valid 24 hours, revocable on-chain
+
+_: **3. Construct Direct Payment**
+
+note: **This is the key innovation.** The wallet builds a transaction that pays *directly to the server* using BRC-29 derived keys. No address is ever displayed or scanned.
+
+Frontend -> User Wallet: Derive recipient public key\nBRC-29: protocol `[2, '3241645161d8']`\nkeyID: `{randomPrefix} {randomSuffix}`\ncounterparty: server identity key
+
+User Wallet -> User Wallet: Generate random derivation nonces\nDerive unique one-time public key\nBuild P2PKH locking script
+
+Frontend -> User Wallet: `wallet.createAction()`\n{ outputs: [{ lockingScript, satoshis }] }
+
+User Wallet -> User Wallet: Sign transaction\nPackage as **AtomicBEEF**\n(tx + SPV ancestry proofs)
+
+User Wallet -> Frontend: PaymentToken\n{ transaction (AtomicBEEF), derivationPrefix,\nderivationSuffix, senderIdentityKey, amount }
+
+_: **4. Send Payment Directly to Server**
+
+Frontend => Exchange Server: `POST /deposit` (BRC-103 authenticated)\n{ PaymentToken + KYC Certificate }
+
+note Exchange Server: **Server-Side Validation (all in one round-trip)**
+
+group: Certificate Verification
+Exchange Server -> Exchange Server: Verify subject matches authenticated sender
+Exchange Server -> Exchange Server: Verify certifier is this server
+Exchange Server -> Exchange Server: Check certificate expiration
+Exchange Server -> WhatsOnChain API: Check revocation anchor UTXO spent?
+WhatsOnChain API --> Exchange Server: { spent: false } — certificate valid
+Exchange Server -> Sanctions API: Re-check sanctions with certificate name
+Sanctions API --> Exchange Server: { sanctioned: false }
+end
+
+group: Transaction Validation & Internalization
+Exchange Server -> Exchange Server: `Transaction.fromBEEF()`\nParse AtomicBEEF envelope
+Exchange Server -> Exchange Server: Derive expected BRC-29 key\n(`forSelf: true`, same protocol & nonces)
+Exchange Server -> Exchange Server: Validate P2PKH hash matches\nderived public key hash
+
+note Exchange Server: **The server now holds the valid, signed transaction**
+
+-: **5. Broadcast & Credit**
+
+Exchange Server => BSV Network: `wallet.internalizeAction()`\nAccept tx into server wallet → **broadcast to miners**
+
+note: The SDK's Services layer submits the transaction directly to miners (ARC/TAAL). **No intermediary nodes, no address monitoring, no callbacks needed.**
+
+Exchange Server -> Exchange Server: `balanceStorage.addBalance()`\nAtomic MongoDB `$inc` operation
+end
+
+Exchange Server => Frontend: { success: true, txid, depositAmount, newBalance }
+
+Frontend -> Frontend: Update UI with new balance
+
+=: **Deposit Complete**
+
+note: **Total round-trips: 1** (client → server → miner). The user's balance is credited the instant the server validates and broadcasts. No polling. No watching. No waiting for block confirmations to detect payment.
