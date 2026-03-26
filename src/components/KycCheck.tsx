@@ -41,6 +41,13 @@ export function KycCheck({
   const [isCheckingStatus, setIsCheckingStatus] = useState(true)
 
   const loadKycStatus = useCallback(async () => {
+    // Empty string means the key hasn't loaded yet from the server;
+    // keep the loading spinner until Dashboard provides a real value.
+    if (certifierPubKey === '') {
+      setIsCheckingStatus(true)
+      return
+    }
+
     setIsCheckingStatus(true)
     try {
       if (!certifierPubKey) {

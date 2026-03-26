@@ -10,11 +10,25 @@ import { makeWallet } from './wallet.js'
 
 dotenv.config({ path: '../.env' })
 
-const chain = (process.env.CHAIN || 'main') as 'test' | 'main'
-const storageURL = process.env.STORAGE_URL!
-const certifierPrivateKey = process.env.CERTIFIER_PRIVATE_KEY!
+// Validate required startup configuration
+const chainEnv = process.env.CHAIN || 'main'
+if (chainEnv !== 'main' && chainEnv !== 'test') {
+  throw new Error(`Invalid CHAIN value "${chainEnv}". Must be "main" or "test".`)
+}
+const chain: 'main' | 'test' = chainEnv
+
+if (!process.env.STORAGE_URL) {
+  throw new Error('Missing required environment variable: STORAGE_URL')
+}
+const storageURL: string = process.env.STORAGE_URL
+
+if (!process.env.CERTIFIER_PRIVATE_KEY) {
+  throw new Error('Missing required environment variable: CERTIFIER_PRIVATE_KEY')
+}
+const certifierPrivateKey: string = process.env.CERTIFIER_PRIVATE_KEY
+
 const yenteUrl = process.env.YENTE_URL || 'http://localhost:8000'
-const PORT = process.env.CERTIFIER_PORT || 3001
+const PORT = parseInt(process.env.CERTIFIER_PORT || '3001', 10)
 
 const KYC_CERTIFICATE_TYPE = Utils.toBase64(Utils.toArray('kyc-identity', 'utf8'))
 const MATCH_SCORE_THRESHOLD = 0.7
@@ -61,9 +75,14 @@ function buildMatchPayload(name: string): object {
   return { schema: 'Person', properties }
 }
 
+const SANCTIONS_TIMEOUT_MS = 5000
+
 async function checkSanctions(name: string): Promise<SanctionsCheckResult> {
   const payload = buildMatchPayload(name)
-  console.log(`[Certifier] Sanctions check for "${name}" via ${yenteUrl}/match/default`)
+  console.log(`[Certifier] Sanctions check via ${yenteUrl}/match/default`)
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), SANCTIONS_TIMEOUT_MS)
 
   try {
     const body = { queries: { q1: payload } }
@@ -71,7 +90,10 @@ async function checkSanctions(name: string): Promise<SanctionsCheckResult> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: controller.signal,
     })
+
+    clearTimeout(timer)
 
     if (!response.ok) {
       const text = await response.text()
@@ -95,14 +117,13 @@ async function checkSanctions(name: string): Promise<SanctionsCheckResult> {
       score: topMatch?.score,
     }
   } catch (error: any) {
-    console.error(`[Certifier] Sanctions API error:`, error.message)
-    // Fail open with a warning
-    return {
-      sanctioned: false,
-      matchedEntity: null,
-      checkedAt: new Date().toISOString(),
-      source: 'opensanctions-yente (unavailable)',
-    }
+    clearTimeout(timer)
+    const reason = error.name === 'AbortError'
+      ? 'Yente request timed out'
+      : error.message
+    console.error(`[Certifier] Sanctions API error:`, reason)
+    // Fail closed: do not treat API failure as "not sanctioned"
+    throw new Error(`Sanctions screening unavailable: ${reason}`)
   }
 }
 
@@ -175,7 +196,16 @@ async function initializeWallet(): Promise<void> {
       const name = officialName.trim()
 
       // Run sanctions check
-      const sanctionsResult = await checkSanctions(name)
+      let sanctionsResult: SanctionsCheckResult
+      try {
+        sanctionsResult = await checkSanctions(name)
+      } catch (sanctionsError: any) {
+        console.error(`[Certifier] Sanctions screening unavailable for ${identityKey.slice(0, 16)}...`)
+        return res.status(503).json({
+          error: 'Sanctions screening unavailable',
+          reason: sanctionsError.message,
+        })
+      }
 
       const approved = !sanctionsResult.sanctioned
 
@@ -187,7 +217,7 @@ async function initializeWallet(): Promise<void> {
         checkedAt: Date.now(),
       })
 
-      console.log(`[Certifier] Review for ${identityKey.slice(0, 16)}...: ${approved ? 'APPROVED' : 'REJECTED'} (${name})`)
+      console.log(`[Certifier] Review for ${identityKey.slice(0, 16)}...: ${approved ? 'APPROVED' : 'REJECTED'}`)
 
       return res.json({
         approved,
@@ -229,7 +259,7 @@ async function initializeWallet(): Promise<void> {
         })
       }
 
-      console.log(`[Certifier] Issuing certificate for ${identityKey.slice(0, 16)}... (${review.officialName})`)
+      console.log(`[Certifier] Issuing certificate for ${identityKey.slice(0, 16)}...`)
 
       // Issue the certificate using MasterCertificate
       // In production, fund the certifier wallet and provide a real revocation anchor.

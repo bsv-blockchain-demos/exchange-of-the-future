@@ -8,6 +8,10 @@ import type { WalletCertificate } from '@bsv/sdk'
 
 export const KYC_CERTIFICATE_TYPE = Utils.toBase64(Utils.toArray('kyc-identity', 'utf8'))
 
+/** Fields revealed to the exchange when proving a deposit certificate.
+ *  Keep in sync with server/src/index.ts deposit handler (decryptedFields.officialName). */
+export const DEPOSIT_FIELDS_TO_REVEAL: string[] = ['officialName']
+
 /**
  * Retrieve a valid KYC certificate from the user's wallet
  * @param certifierPubKey - The trusted certifier's public key
@@ -28,11 +32,21 @@ export async function getCertificateFromWallet(
       return null
     }
 
-    // Return the most recent valid certificate
-    return result.certificates[0]
+    // Filter to certificates that have a revocationOutpoint (well-formed).
+    // Full on-chain revocation checks happen server-side at deposit time.
+    const valid = result.certificates.filter(
+      (c) => c.revocationOutpoint && c.revocationOutpoint.length > 0
+    )
+
+    if (valid.length === 0) {
+      return null
+    }
+
+    // Return the last certificate (most recently acquired)
+    return valid[valid.length - 1]
   } catch (error) {
     console.error('[KYC] Failed to get certificate from wallet:', error)
-    return null
+    throw error
   }
 }
 
@@ -52,7 +66,7 @@ export async function proveCertificateToExchange(
   const wallet = new WalletClient()
   const result = await wallet.proveCertificate({
     certificate: cert,
-    fieldsToReveal: ['officialName'],
+    fieldsToReveal: DEPOSIT_FIELDS_TO_REVEAL,
     verifier: exchangePubKey,
   })
 

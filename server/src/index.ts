@@ -8,12 +8,29 @@ import { BalanceStorage } from './storage.js'
 import { checkSanctions } from './trustflow/sanctions.js'
 import { checkRevocationStatus } from './trustflow/certificate.js'
 
-// Load environment variables
+// Load and validate environment variables
 dotenv.config()
-const chain = process.env.CHAIN! as 'test' | 'main'
-const storageURL = process.env.STORAGE_URL!
-const privateKey = process.env.PRIVATE_KEY!
-const TRUSTED_CERTIFIER_KEY = process.env.TRUSTED_CERTIFIER_KEY!
+
+const chainEnv = process.env.CHAIN
+if (chainEnv !== 'main' && chainEnv !== 'test') {
+  throw new Error(`Missing or invalid CHAIN env var (got "${chainEnv}"). Must be "main" or "test".`)
+}
+const chain: 'main' | 'test' = chainEnv
+
+if (!process.env.STORAGE_URL) {
+  throw new Error('Missing required environment variable: STORAGE_URL')
+}
+const storageURL: string = process.env.STORAGE_URL
+
+if (!process.env.PRIVATE_KEY) {
+  throw new Error('Missing required environment variable: PRIVATE_KEY')
+}
+const privateKey: string = process.env.PRIVATE_KEY
+
+if (!process.env.TRUSTED_CERTIFIER_KEY) {
+  throw new Error('Missing required environment variable: TRUSTED_CERTIFIER_KEY. Server cannot verify certificates without it.')
+}
+const TRUSTED_CERTIFIER_KEY: string = process.env.TRUSTED_CERTIFIER_KEY
 
 const app = express()
 const PORT = process.env.PORT || 3000
@@ -182,7 +199,17 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
     }
 
     // 6. Decrypt certificate fields using the verifier keyring
-    const decryptedFields = await verifiableCert.decryptFields(_wallet as any)
+    let decryptedFields: Record<string, string>
+    try {
+      decryptedFields = await verifiableCert.decryptFields(_wallet as any)
+    } catch (decryptError: any) {
+      console.log(`[Deposit] Blocked - Failed to decrypt certificate fields for ${senderIdentityKey.slice(0, 16)}...`)
+      return res.status(403).json({
+        error: 'Certificate missing required fields',
+        reason: 'Certificate does not contain officialName field.',
+        kycRequired: true
+      })
+    }
     const officialName = decryptedFields.officialName
 
     if (!officialName) {
@@ -198,15 +225,14 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
     const sanctionsRecheck = await checkSanctions(officialName)
 
     if (sanctionsRecheck.sanctioned) {
-      console.log(`[Deposit] Blocked - Sanctions re-check failed for ${officialName}`)
+      console.log(`[Deposit] Blocked - Sanctions re-check failed for ${senderIdentityKey.slice(0, 16)}...`)
       return res.status(403).json({
         error: 'Deposit blocked: User appears on sanctions list',
         sanctioned: true,
-        matchedEntity: sanctionsRecheck.matchedEntity
       })
     }
 
-    console.log(`[Deposit] Certificate verified for ${officialName} (${senderIdentityKey.slice(0, 16)}...)`)
+    console.log(`[Deposit] Certificate verified for ${senderIdentityKey.slice(0, 16)}...`)
 
     // =========================================================================
     // ORIGINAL DEPOSIT LOGIC

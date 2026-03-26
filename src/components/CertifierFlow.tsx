@@ -220,7 +220,17 @@ export function CertifierFlow({ identityKey }: CertifierFlowProps) {
               <div className="space-y-2">
                 <Label className="text-indigo-200">Identity Document</Label>
                 <div
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Upload identity document"
+                  aria-pressed={documentUploaded}
                   onClick={() => setDocumentUploaded(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setDocumentUploaded(true)
+                    }
+                  }}
                   className={`
                     border-2 rounded-xl p-6 cursor-pointer transition-all
                     ${documentUploaded
