@@ -45,7 +45,7 @@ function buildMatchPayload(name: string): object {
 export async function checkSanctions(name: string): Promise<SanctionsCheckResult> {
   const payload = buildMatchPayload(name)
 
-  console.log(`[TrustFlow] Sanctions check for "${name}" via ${YENTE_BASE_URL}/match/default`)
+  console.log(`[TrustFlow] Sanctions check via ${YENTE_BASE_URL}/match/default`)
 
   try {
     const body = { queries: { q1: payload } }

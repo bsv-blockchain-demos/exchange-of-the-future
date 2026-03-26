@@ -11,10 +11,11 @@ import {
   internalizeWithdrawal
 } from "@/lib/bsv-wallet";
 import { AuthFetch, IdentityClient } from "@bsv/sdk";
+import type { WalletCertificate } from "@bsv/sdk";
 import { useWallet } from "@/hooks/use-wallet";
 import { TransactionHistory } from "@/components/TransactionHistory";
 import { KycCheck } from "@/components/KycCheck";
-import { KycStatusInfo, loadCertificateFromLocalStorage, KycCertificate } from "@/lib/kyc";
+import { KycStatusInfo, proveCertificateToExchange } from "@/lib/kyc";
 
 
 interface DashboardProps {
@@ -26,7 +27,7 @@ const BSV_USD_RATE = 25000;
 const SATOSHIS_PER_BSV = 100000000;
 
 export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
-  const [bsvBalanceSats, setBsvBalanceSats] = useState(0); // Store in satoshis
+  const [bsvBalanceSats, setBsvBalanceSats] = useState(0);
   const [usdBalance, setUsdBalance] = useState(0);
   const [depositAmount, setDepositAmount] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
@@ -37,9 +38,10 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
   const [authFetch, setAuthFetch] = useState<AuthFetch | null>(null);
   const [serverIdentityKey, setServerIdentityKey] = useState<string>("");
+  const [certifierPubKey, setCertifierPubKey] = useState<string>("");
   const [transactionRefreshKey, setTransactionRefreshKey] = useState(0);
   const [kycStatus, setKycStatus] = useState<KycStatusInfo | null>(null);
-  const [certificate, setCertificate] = useState<KycCertificate | null>(null);
+  const [certificate, setCertificate] = useState<WalletCertificate | null>(null);
   const [avatarURL, setAvatarURL] = useState<string | null>(null);
   const [identityName, setIdentityName] = useState<string | null>(null);
 
@@ -67,28 +69,27 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
     resolveIdentity();
   }, [identityKey, wallet]);
 
-  // Load certificate from localStorage when KYC status changes
   const handleKycStatusChange = useCallback((status: KycStatusInfo) => {
     setKycStatus(status);
-    const cert = loadCertificateFromLocalStorage();
-    setCertificate(cert);
+    setCertificate(status.certificate || null);
   }, []);
 
-  // Load balance from backend on mount
   useEffect(() => {
     const f = new AuthFetch(wallet);
     setAuthFetch(f);
     loadBalance(f);
   }, [identityKey]);
 
-  const loadBalance = async (authFetch: AuthFetch) => {
+  const loadBalance = async (af: AuthFetch) => {
     try {
       setIsLoadingBalance(true);
-      const result = await getBalance(authFetch);
-      // Backend stores in satoshis, keep as satoshis
+      const result = await getBalance(af);
       setBsvBalanceSats(result.balance);
       setUsdBalance(result.usdBalance);
       setServerIdentityKey(result.serverIdentityKey);
+      if (result.trustedCertifierKey) {
+        setCertifierPubKey(result.trustedCertifierKey);
+      }
       toast.info(`Loaded balance: ${result.balance} satoshis, $${result.usdBalance.toFixed(5)} USD`);
     } catch (error) {
       console.error("Failed to load balance:", error);
@@ -105,7 +106,7 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
     }
 
     if (!certificate) {
-      toast.error("No certificate loaded. Get one from the Certification Company.");
+      toast.error("No certificate found. Get certified first.");
       return;
     }
 
@@ -119,20 +120,21 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
     try {
       toast.info("Creating deposit transaction...");
 
-      console.log({ serverIdentityKey })
-
-      // Create the payment transaction (amount already in satoshis)
       const paymentToken = await createDepositPayment(
         amountSatoshis,
         serverIdentityKey
       );
 
-      toast.info("Presenting certificate and sending deposit...");
+      toast.info("Proving certificate to exchange...");
 
-      // Send to backend with certificate
-      const result = await depositPayment(paymentToken, authFetch, certificate);
+      // Prove certificate fields to the exchange
+      const proof = await proveCertificateToExchange(certificate, serverIdentityKey);
 
-      // Update local balance from server response (already in satoshis)
+      toast.info("Sending deposit with certificate proof...");
+
+      // Send to backend with certificate proof
+      const result = await depositPayment(paymentToken, authFetch, proof.certificate, proof.keyringForVerifier);
+
       setBsvBalanceSats(result.newBalance);
       setDepositAmount("");
 
@@ -140,7 +142,6 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
         `Deposited ${amountSatoshis} sats\nTXID: ${result.txid.slice(0, 16)}...`
       );
 
-      // Refresh transaction history
       setTransactionRefreshKey(prev => prev + 1);
     } catch (error: any) {
       console.error("Deposit failed:", error);
@@ -148,7 +149,7 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
     } finally {
       setIsDepositing(false);
     }
-  }, [authFetch, depositAmount, serverIdentityKey])
+  }, [authFetch, depositAmount, serverIdentityKey, certificate])
 
   const handleWithdraw = useCallback(async () => {
     const amountSatoshis = Number.parseInt(withdrawAmount, 10);
@@ -169,7 +170,6 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
 
       toast.info("Internalizing withdrawal payment...");
 
-      // Internalize the payment into our wallet
       const paymentData = result.payment.outputs[0].paymentRemittance;
       await internalizeWithdrawal({
         tx: result.payment.tx,
@@ -178,7 +178,6 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
         senderIdentityKey: paymentData.senderIdentityKey,
       });
 
-      // Update local balance from server response (already in satoshis)
       setBsvBalanceSats(result.newBalance);
       setWithdrawAmount("");
 
@@ -186,7 +185,6 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
         `Withdrawn ${amountSatoshis} sats\nTXID: ${result.txid.slice(0, 16)}...`
       );
 
-      // Refresh transaction history
       setTransactionRefreshKey(prev => prev + 1);
     } catch (error: any) {
       console.error("Withdrawal failed:", error);
@@ -210,7 +208,6 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
 
     try {
       if (swapDirection === "bsv-to-usd") {
-        // Swapping satoshis to USD
         const satoshis = Math.floor(amount);
         if (satoshis > bsvBalanceSats) {
           toast.error("Insufficient BSV balance");
@@ -226,7 +223,6 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
         const usdAmount = (satoshis / SATOSHIS_PER_BSV) * BSV_USD_RATE;
         toast.success(`Swapped ${satoshis} sats for $${usdAmount.toFixed(5)} USD`);
       } else {
-        // Swapping USD to satoshis
         const usdAmount = amount;
         if (usdAmount > usdBalance) {
           toast.error("Insufficient USD balance");
@@ -396,7 +392,6 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
           </CardHeader>
           <CardContent>
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
-              {/* BSV Input */}
               <div className="flex-1 space-y-2">
                 <Label htmlFor="swap-bsv">BSV (Satoshis)</Label>
                 <div className="p-3 sm:p-4 bg-muted rounded-lg">
@@ -417,7 +412,6 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
                 </div>
               </div>
 
-              {/* Swap Button */}
               <div className="flex items-center justify-center py-1 sm:pt-8">
                 <Button
                   onClick={toggleSwapDirection}
@@ -429,7 +423,6 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
                 </Button>
               </div>
 
-              {/* USD Input */}
               <div className="flex-1 space-y-2">
                 <Label htmlFor="swap-usd">USD</Label>
                 <div className="p-3 sm:p-4 bg-muted rounded-lg">
@@ -461,10 +454,9 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
           </CardContent>
         </Card>
 
-        {/* Certification Company - Get Certificate */}
+        {/* Identity Certificate Status */}
         <KycCheck
-          authFetch={authFetch}
-          serverIdentityKey={serverIdentityKey}
+          certifierPubKey={certifierPubKey}
           onKycStatusChange={handleKycStatusChange}
         />
 
@@ -487,14 +479,14 @@ export const Dashboard = ({ identityKey, onDisconnect }: DashboardProps) => {
                   <span className="font-medium text-green-800">Certificate Loaded</span>
                 </div>
                 <div className="text-sm text-green-700 space-y-1">
-                  <p><strong>Name:</strong> {certificate.fields.officialName}</p>
-                  <p><strong>Status:</strong> {certificate.fields.sanctionsStatus === 'clear' ? 'Clear' : 'Sanctioned'}</p>
-                  <p><strong>Expires:</strong> {new Date(certificate.fields.expiresAt).toLocaleString()}</p>
+                  <p><strong>Name:</strong> {certificate.fields?.officialName}</p>
+                  <p><strong>Status:</strong> {certificate.fields?.sanctionsStatus === 'clear' ? 'Clear' : 'Sanctioned'}</p>
+                  <p><strong>Expires:</strong> {certificate.fields?.expiresAt ? new Date(certificate.fields.expiresAt).toLocaleString() : 'N/A'}</p>
                   <p className="text-xs text-green-600 mt-2">
-                    Serial: {certificate.fields.serialNumber.slice(0, 8)}...
+                    Serial: {certificate.fields?.serialNumber?.slice(0, 8)}...
                   </p>
                 </div>
-                {certificate.fields.sanctionsStatus === 'matched' && (
+                {certificate.fields?.sanctionsStatus === 'matched' && (
                   <div className="mt-3 p-2 rounded bg-red-100 text-red-700 text-sm">
                     Sanctions match detected. Deposits are blocked.
                   </div>

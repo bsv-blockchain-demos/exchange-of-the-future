@@ -25,6 +25,7 @@ services:
       - CHAIN=${CHAIN}
       - STORAGE_URL=${STORAGE_URL}
       - PRIVATE_KEY=${PRIVATE_KEY}
+      - TRUSTED_CERTIFIER_KEY=${TRUSTED_CERTIFIER_KEY}
       - MONGODB_URI=mongodb://mongodb:27017/bsv_exchange
       - YENTE_URL=http://open-sanctions-api:8000
     ports:
@@ -40,6 +41,29 @@ services:
       open-sanctions-api:
         condition: service_healthy
 
+  # Certifier Identity Services
+  certifier:
+    build:
+      context: ./certifier
+      dockerfile: Dockerfile
+    container_name: bsv-certifier
+    environment:
+      - PORT=3001
+      - CHAIN=${CHAIN}
+      - STORAGE_URL=${STORAGE_URL}
+      - CERTIFIER_PRIVATE_KEY=${CERTIFIER_PRIVATE_KEY}
+      - YENTE_URL=http://open-sanctions-api:8000
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    restart: unless-stopped
+    networks:
+      - bsv-network
+    depends_on:
+      open-sanctions-api:
+        condition: service_healthy
+
   # Frontend React App
   frontend:
     build:
@@ -47,6 +71,7 @@ services:
       dockerfile: Dockerfile
       args:
         - VITE_API_BASE=http://localhost:3000
+        - VITE_CERTIFIER_API_BASE=http://localhost:3001
     restart: unless-stopped
     networks:
       - bsv-network

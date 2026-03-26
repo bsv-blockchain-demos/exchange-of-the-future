@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "dev:server": "tsx watch server/src/index.ts",
-    "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
+    "dev:certifier": "tsx watch certifier/src/index.ts",
+    "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\" \"npm run dev:certifier\"",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "build:server": "tsc -p server/tsconfig.json",
@@ -55,6 +56,7 @@
     "dotenv": "^16.4.5",
     "embla-carousel-react": "^8.6.0",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.3.1",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.462.0",
     "mongodb": "^7.0.0",
