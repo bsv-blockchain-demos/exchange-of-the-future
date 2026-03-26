@@ -83,9 +83,24 @@ export interface DepositRequest extends PaymentToken {
  */
 app.post('/deposit', async (req: AuthRequest, res: Response) => {
   try {
-    const args = req.body as DepositRequest;
-    const senderIdentityKey = req.auth.identityKey;
-    const { certificate, keyringForVerifier } = args;
+    // Runtime validation: ensure body is a valid object before destructuring
+    const args = req.body;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) {
+      return res.status(400).json({
+        error: 'Invalid request body',
+        reason: 'Request body must be a JSON object.'
+      })
+    }
+
+    const senderIdentityKey = req.auth?.identityKey;
+    if (!senderIdentityKey || typeof senderIdentityKey !== 'string') {
+      return res.status(403).json({
+        error: 'Authentication required',
+        reason: 'Missing or invalid identity key.'
+      })
+    }
+
+    const { certificate, keyringForVerifier } = args as DepositRequest;
 
     // =========================================================================
     // CERTIFICATE VERIFICATION (User proves certificate to exchange)
@@ -98,6 +113,26 @@ app.post('/deposit', async (req: AuthRequest, res: Response) => {
         error: 'Identity Certificate required',
         reason: 'No certificate presented. Get one from the certifier.',
         kycRequired: true
+      })
+    }
+
+    // 1b. Validate certificate is an object with expected string fields
+    if (typeof certificate !== 'object' || Array.isArray(certificate)) {
+      return res.status(400).json({
+        error: 'Invalid certificate',
+        reason: 'Certificate must be a JSON object.'
+      })
+    }
+    if (typeof certificate.subject !== 'string' || typeof certificate.certifier !== 'string') {
+      return res.status(400).json({
+        error: 'Invalid certificate',
+        reason: 'Certificate must contain string "subject" and "certifier" fields.'
+      })
+    }
+    if (typeof keyringForVerifier !== 'object' || Array.isArray(keyringForVerifier)) {
+      return res.status(400).json({
+        error: 'Invalid keyring',
+        reason: 'keyringForVerifier must be a JSON object.'
       })
     }
 
