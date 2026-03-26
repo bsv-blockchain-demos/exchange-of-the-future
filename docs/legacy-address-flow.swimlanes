@@ -1,0 +1,124 @@
+title: **Legacy Address-Based Payment Flow** ~~(The Old Way)~~
+
+note: **Address-based payments** require the server to generate a unique address, display it as a QR code, register a watch address with a network node, then *wait and hope* the node notifies them when a matching transaction appears. Multiple round-trips, multiple failure points, and inherent latency.
+
+_: **1. Request Payment Address**
+
+User Wallet -> Frontend: User initiates deposit
+
+Frontend => Merchant Server: `POST /create-invoice`\n{ amount }
+
+Merchant Server -> Merchant Server: Generate unique receive address\n(often from an HD key chain)
+
+Merchant Server -> Frontend: { address, amount, invoiceId }
+
+Frontend -> Frontend: Render QR code with\n`bitcoin:{address}?amount={amount}`
+
+note: The user now sees a QR code. The server has **no idea** if or when the user will actually pay. It must set up monitoring infrastructure and wait.
+
+_: **2. Register Watch Address**
+
+Merchant Server => Network Node: Register watch address callback\n`POST /watch`\n{ address, callbackUrl }
+
+note Merchant Server, Network Node: The server must maintain an active relationship with a network node that monitors **every transaction on the entire network** looking for outputs matching this address. This is expensive infrastructure.
+
+Network Node -> Network Node: Add address to watch list\n(monitoring all incoming transactions)
+
+Network Node --> Merchant Server: { registered: true }
+
+_: **3. User Scans & Sends (uncontrolled)**
+
+note: The user's wallet sends the transaction to the P2P network — **not to the server**. The server has no direct involvement in the transaction.
+
+Frontend -> User Wallet: Display QR code to user
+
+User Wallet -> User Wallet: User scans QR code\nWallet constructs transaction
+
+User Wallet => BSV Network: Broadcast transaction to\nP2P network (gossip protocol)
+
+...: {fas-spinner} **Waiting for network propagation...**\nTransaction propagates node-to-node\nacross the P2P network
+
+note: The transaction must gossip across the network until it reaches the specific node the server registered with. **This can take seconds to minutes** depending on network topology and node connectivity.
+
+_: **4. Node Detection (eventually)**
+
+BSV Network -> Network Node: Transaction arrives\n(via P2P gossip)
+
+Network Node -> Network Node: Scan all outputs against\nwatch address list
+
+note Network Node: The node is comparing **every transaction's outputs** against a list of watched addresses. At scale, this is computationally expensive and adds latency.
+
+if: Address match found
+Network Node => Merchant Server: `POST /callback`\n{ txid, address, amount }
+else: No match yet
+Network Node -> Network Node: Keep waiting...
+end
+
+_: **5. Server-Side Verification**
+
+Merchant Server -> Merchant Server: Look up invoiceId by address
+
+Merchant Server -> BSV Network: Fetch full transaction\n`GET /tx/{txid}`
+
+BSV Network --> Merchant Server: Raw transaction data
+
+Merchant Server -> Merchant Server: Verify output amount matches invoice\nVerify transaction is valid
+
+if: Wait for confirmations? (common practice)
+...: {fas-spinner} **Waiting for block confirmation...**\nTypically 1-6 blocks (10-60 minutes)
+
+BSV Network -> Network Node: Block mined containing tx
+Network Node => Merchant Server: Confirmation callback
+end
+
+Merchant Server -> Merchant Server: Credit user balance
+
+Merchant Server => Frontend: { success, balance }\n(via polling or websocket)
+
+note: The frontend has been **polling the server** this entire time, or holding a websocket open, waiting to hear if the payment was detected.
+
+=: **Payment "Complete"** ~~(finally)~~
+
+_: **Problems with this approach**
+
+note:
+**{fas-times-circle} Multiple failure points:**
+- QR code scanning can fail
+- Watch address registration can fail or expire
+- Network node can go offline
+- Callback can fail (HTTP timeout, server restart)
+- Transaction may never propagate to the watched node
+
+**{fas-clock} Inherent latency:**
+- P2P gossip propagation: **2-30 seconds**
+- Node scanning + callback: **1-5 seconds**
+- Optional confirmations: **10-60+ minutes**
+- Frontend polling interval: **1-5 seconds per check**
+- **Total: 5 seconds to 60+ minutes**
+
+**{fas-server} Infrastructure overhead:**
+- Must run or pay for a network node with watch-address capability
+- Must maintain callback endpoints that are always available
+- Must handle missed/duplicate callbacks
+- Must reconcile if callbacks fail (manual intervention)
+- Address reuse risks if generation fails
+
+**{fas-unlink} Decoupled & fragile:**
+- The payer and payee never directly communicate
+- The server is a passive observer relying on third-party infrastructure
+- No cryptographic link between the payer's identity and the payment
+- No SPV proof delivered with the payment
+- No mutual authentication
+
+_: **Compare to Direct Payment**
+
+note:
+**{fas-check-circle} BSV Swift Exchange (Direct Payment):**
+- **1 round-trip**: wallet → server → miner
+- **Instant**: balance credited in milliseconds
+- **Zero infrastructure**: no watch nodes, no callbacks
+- **Cryptographic identity**: BRC-29 key derivation links payer to payment
+- **SPV proof included**: AtomicBEEF contains full ancestry
+- **Mutual authentication**: BRC-103 authenticates both parties
+- **No address reuse**: unique derived key per transaction
+- **Server controls broadcast**: guaranteed to reach miners

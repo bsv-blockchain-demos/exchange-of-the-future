@@ -14,7 +14,7 @@ export const WalletConnect = ({ onConnect }: WalletConnectProps) => {
             Superfast Exchange
           </h1>
           <p className="text-xl text-muted-foreground">
-            Trade BSV using Direct Instant Payments.
+            Direct Instant Payments<br />for exchange treasury management platforms.
           </p>
         </div>
         
