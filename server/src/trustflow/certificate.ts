@@ -6,6 +6,9 @@
  * Check if a revocation anchor UTXO is still unspent (certificate not revoked)
  * Uses WhatsOnChain API
  */
+// Strict hex txid pattern: exactly 64 lowercase hex characters
+const TXID_REGEX = /^[0-9a-f]{64}$/
+
 export async function checkRevocationStatus(
   outpoint: string
 ): Promise<{ revoked: boolean; error?: string }> {
@@ -16,15 +19,19 @@ export async function checkRevocationStatus(
   const [txid, voutStr] = outpoint.split(':')
   const vout = parseInt(voutStr, 10)
 
-  if (!txid || isNaN(vout)) {
+  if (!txid || isNaN(vout) || vout < 0) {
     return { revoked: false, error: 'Invalid outpoint format' }
+  }
+
+  // Validate txid is a well-formed transaction hash to prevent SSRF
+  if (!TXID_REGEX.test(txid)) {
+    return { revoked: false, error: 'Invalid transaction ID format' }
   }
 
   try {
     // Check if the UTXO is unspent using WhatsOnChain API (mainnet)
-    const response = await fetch(
-      `https://api.whatsonchain.com/v1/bsv/main/tx/${txid}/out/${vout}/spent`
-    )
+    const url = `https://api.whatsonchain.com/v1/bsv/main/tx/${encodeURIComponent(txid)}/out/${encodeURIComponent(String(vout))}/spent`
+    const response = await fetch(url)
 
     if (!response.ok) {
       // If 404, the transaction might not be confirmed yet - treat as unspent

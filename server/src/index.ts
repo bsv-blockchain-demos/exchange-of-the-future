@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express'
+import rateLimit from 'express-rate-limit'
 import dotenv from 'dotenv'
 import { createAuthMiddleware, AuthRequest } from '@bsv/auth-express-middleware'
 import { Transaction, P2PKH, PublicKey, InternalizeActionArgs, Random, Utils, WalletInterface, VerifiableCertificate } from '@bsv/sdk'
@@ -64,6 +65,29 @@ app.use((req, res, next) => {
 })
 app.use(express.json())
 
+// Rate limiting for sensitive endpoints
+const depositLimiter = rateLimit({
+  windowMs: 60 * 1000,   // 1 minute
+  max: 10,               // 10 deposits per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many deposit requests, please try again later.' },
+})
+const swapLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many swap requests, please try again later.' },
+})
+const withdrawLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many withdrawal requests, please try again later.' },
+})
+
 await initializeWalletMiddleware(app);
 
 /**
@@ -98,7 +122,7 @@ export interface DepositRequest extends PaymentToken {
  *   amount: number
  * }
  */
-app.post('/deposit', async (req: AuthRequest, res: Response) => {
+app.post('/deposit', depositLimiter, async (req: AuthRequest, res: Response) => {
   try {
     // Runtime validation: ensure body is a valid object before destructuring
     const args = req.body;
@@ -412,7 +436,7 @@ app.get('/transactions', async (req: AuthRequest, res: Response) => {
  *
  * Body: { direction: 'bsv-to-usd' | 'usd-to-bsv', amount: number }
  */
-app.post('/swap', async (req: AuthRequest, res: Response) => {
+app.post('/swap', swapLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const { direction, amount } = req.body
 
@@ -475,7 +499,7 @@ app.post('/swap', async (req: AuthRequest, res: Response) => {
  *
  * Body: { amount: number }
  */
-app.post('/withdraw', async (req: AuthRequest, res: Response) => {
+app.post('/withdraw', withdrawLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const { amount } = req.body
 
@@ -586,7 +610,7 @@ app.get('/health', (_req: Request, res: Response) => {
 async function start() {
   app.listen(PORT, () => {
     console.log(`\n🚀 BSV Exchange Server running on http://localhost:${PORT}`)
-    console.log(`  Trusted certifier: ${TRUSTED_CERTIFIER_KEY?.slice(0, 16)}...`)
+    console.log(`  Trusted certifier configured: yes`)
     console.log(`\nEndpoints:`)
     console.log(`  POST   /deposit              - Accept a payment deposit (requires certificate)`)
     console.log(`  GET    /balance              - Get user balance + trusted certifier key`)
