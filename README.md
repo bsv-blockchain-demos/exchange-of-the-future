@@ -101,4 +101,4 @@ No automated test script is provided. Build checks do not exercise wallet transf
 
 ## Licence
 
-The backend README previously declared MIT, but no licence file or package licence declaration is included. The maintainers need to confirm the intended terms.
+**Documented backend licence: MIT.** This is the declaration recorded in the [backend documentation](server/README.md#licence). No standalone licence file or package licence declaration is included in this repository.

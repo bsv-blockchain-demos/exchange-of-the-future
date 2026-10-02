@@ -84,4 +84,4 @@ Identity-check records use `KycStorage`. Wallet history comes from wallet action
 
 ## Licence
 
-Licensing terms are unresolved. See the [root licence note](../README.md#licence).
+**Documented backend licence: MIT.** This is the declaration recorded in the backend documentation. No standalone licence file or package licence declaration is included in this repository. See the [repository licence section](../README.md#licence).
