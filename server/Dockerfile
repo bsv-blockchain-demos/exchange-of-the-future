@@ -1,5 +1,5 @@
 # Backend Dockerfile
-FROM node:20-alpine AS base
+FROM node:24.22.1-alpine AS base
 
 WORKDIR /app
 
@@ -17,7 +17,7 @@ COPY tsconfig.json ./
 RUN npm run build:server
 
 # Production stage
-FROM node:20-alpine AS production
+FROM node:24.22.1-alpine AS production
 
 WORKDIR /app
 
